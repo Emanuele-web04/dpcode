@@ -12,7 +12,7 @@ packages/*/dist
 build/
 .logs/
 release/
-.t3
+/.dpcode/electron-dev
 .idea/
 apps/web/.playwright
 apps/web/playwright-report
