@@ -306,6 +306,18 @@ describe("buildCodexProcessEnv", () => {
     expect(readEnvironment).not.toHaveBeenCalled();
     expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
   });
+
+  it("prepends an absolute codex binary directory to PATH", () => {
+    const env = buildCodexProcessEnv({
+      env: {
+        PATH: "/usr/bin",
+      },
+      binaryPath: "/home/test/.nvm/versions/node/v22.22.2/bin/codex",
+      platform: "linux",
+    });
+
+    expect(env.PATH).toBe("/home/test/.nvm/versions/node/v22.22.2/bin:/usr/bin");
+  });
 });
 
 describe("handleStdoutLine", () => {

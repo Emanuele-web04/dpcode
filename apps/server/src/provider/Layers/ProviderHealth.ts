@@ -8,13 +8,18 @@
  *
  * @module ProviderHealthLive
  */
-import * as OS from "node:os";
 import type {
   ServerProviderAuthStatus,
   ServerProviderStatus,
   ServerProviderStatusState,
 } from "@t3tools/contracts";
-import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
+import {
+  applyCodexBinaryToPath,
+  parseCodexConfigModelProvider,
+  readConfiguredCodexHomePath,
+  resolveCodexBinaryPath,
+  resolveCodexHome,
+} from "@t3tools/shared/codexConfig";
 import {
   Array,
   Effect,
@@ -265,7 +270,7 @@ const OPENAI_AUTH_PROVIDERS = new Set(["openai"]);
 export const readCodexConfigModelProvider = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const codexHome = process.env.CODEX_HOME || path.join(OS.homedir(), ".codex");
+  const codexHome = resolveCodexHome(process.env);
   const configPath = path.join(codexHome, "config.toml");
 
   const content = yield* fileSystem
@@ -301,7 +306,11 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 const runCodexCommand = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("codex", [...args], {
+    const codexBinaryPath = resolveCodexBinaryPath(process.env);
+    const codexHomePath = readConfiguredCodexHomePath(process.env);
+    const envWithCodexPath = applyCodexBinaryToPath(process.env, codexBinaryPath);
+    const command = ChildProcess.make(codexBinaryPath, [...args], {
+      env: codexHomePath ? { ...envWithCodexPath, CODEX_HOME: codexHomePath } : envWithCodexPath,
       shell: process.platform === "win32",
     });
 
@@ -348,6 +357,7 @@ export const checkCodexProviderStatus: Effect.Effect<
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > = Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
+  const codexBinaryPath = resolveCodexBinaryPath(process.env);
 
   // Probe 1: `codex --version` — is the CLI reachable?
   const versionProbe = yield* runCodexCommand(["--version"]).pipe(
@@ -364,7 +374,7 @@ export const checkCodexProviderStatus: Effect.Effect<
       authStatus: "unknown" as const,
       checkedAt,
       message: isCommandMissingCause(error)
-        ? "Codex CLI (`codex`) is not installed or not on PATH."
+        ? `Codex CLI (\`${codexBinaryPath}\`) is not installed or not on PATH.`
         : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
     };
   }

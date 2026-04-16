@@ -11,6 +11,11 @@ import type {
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
+import {
+  applyCodexBinaryToPath,
+  readConfiguredCodexHomePath,
+  resolveCodexBinaryPath,
+} from "@t3tools/shared/codexConfig";
 
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = "desktop:server-transcribe-voice";
 
@@ -81,9 +86,12 @@ async function resolveDesktopVoiceAuth(
   cwd: string,
 ): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
-    const child = ChildProcess.spawn("codex", ["app-server"], {
+    const codexBinaryPath = resolveCodexBinaryPath(process.env);
+    const codexHomePath = readConfiguredCodexHomePath(process.env);
+    const envWithCodexPath = applyCodexBinaryToPath(process.env, codexBinaryPath);
+    const child = ChildProcess.spawn(codexBinaryPath, ["app-server"], {
       cwd,
-      env: process.env,
+      env: codexHomePath ? { ...envWithCodexPath, CODEX_HOME: codexHomePath } : envWithCodexPath,
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",
     });
@@ -111,7 +119,9 @@ async function resolveDesktopVoiceAuth(
     };
 
     child.once("error", (error) => {
-      rejectOnce(new Error(`Could not start Codex auth discovery: ${error.message}`));
+      rejectOnce(
+        new Error(`Could not start Codex auth discovery (${codexBinaryPath}): ${error.message}`),
+      );
     });
     child.stderr.on("data", () => {
       // Ignore stderr noise from the discovery process; the JSON-RPC result is authoritative.

@@ -37,7 +37,12 @@ import {
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
-import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
+import {
+  applyCodexBinaryToPath,
+  readActiveCodexProviderEnvKey,
+  readConfiguredCodexHomePath,
+  resolveCodexBinaryPath,
+} from "@t3tools/shared/codexConfig";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import {
   readEnvironmentFromLoginShell,
@@ -242,13 +247,19 @@ function asString(value: unknown): string | undefined {
 export function buildCodexProcessEnv(
   input: {
     readonly env?: NodeJS.ProcessEnv;
+    readonly binaryPath?: string;
     readonly homePath?: string;
     readonly platform?: NodeJS.Platform;
     readonly readEnvironment?: ShellEnvironmentReader;
   } = {},
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
-  const effectiveEnv = input.homePath ? { ...baseEnv, CODEX_HOME: input.homePath } : baseEnv;
+  const codexBinaryPath = input.binaryPath ?? resolveCodexBinaryPath(baseEnv);
+  const configuredHomePath = input.homePath ?? readConfiguredCodexHomePath(baseEnv);
+  const envWithCodexPath = applyCodexBinaryToPath(baseEnv, codexBinaryPath);
+  const effectiveEnv = configuredHomePath
+    ? { ...envWithCodexPath, CODEX_HOME: configuredHomePath }
+    : envWithCodexPath;
   const platform = input.platform ?? process.platform;
 
   if (platform === "darwin" || platform === "linux") {
@@ -275,6 +286,8 @@ export function buildCodexProcessEnv(
       // Keep inherited environment if shell lookup fails.
     }
   }
+
+  Object.assign(effectiveEnv, applyCodexBinaryToPath(effectiveEnv, codexBinaryPath));
 
   return effectiveEnv;
 }
@@ -685,6 +698,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
+          binaryPath: codexBinaryPath,
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
         stdio: ["pipe", "pipe", "pipe"],
@@ -1202,6 +1216,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
+          binaryPath: codexBinaryPath,
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
         stdio: ["pipe", "pipe", "pipe"],
@@ -1681,13 +1696,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const now = new Date().toISOString();
+    const codexBinaryPath = resolveCodexBinaryPath(process.env);
+    const codexHomePath = readConfiguredCodexHomePath(process.env);
     this.assertSupportedCodexCliVersion({
-      binaryPath: "codex",
+      binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
+      ...(codexHomePath ? { homePath: codexHomePath } : {}),
     });
-    const child = spawn("codex", ["app-server"], {
+    const child = spawn(codexBinaryPath, ["app-server"], {
       cwd: normalizedCwd,
-      env: buildCodexProcessEnv(),
+      env: buildCodexProcessEnv({
+        binaryPath: codexBinaryPath,
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+      }),
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",
     });
@@ -2675,12 +2696,14 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   readonly homePath?: string;
 } {
   const options = input.providerOptions?.codex;
-  if (!options) {
-    return {};
-  }
+  const configuredCodexHomePath = readConfiguredCodexHomePath(process.env);
   return {
-    ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
-    ...(options.homePath ? { homePath: options.homePath } : {}),
+    binaryPath: options?.binaryPath ?? resolveCodexBinaryPath(process.env),
+    ...(options?.homePath
+      ? { homePath: options.homePath }
+      : configuredCodexHomePath
+        ? { homePath: configuredCodexHomePath }
+        : {}),
   };
 }
 
@@ -2692,6 +2715,7 @@ function assertSupportedCodexCliVersion(input: {
   const result = spawnSync(input.binaryPath, ["--version"], {
     cwd: input.cwd,
     env: buildCodexProcessEnv({
+      binaryPath: input.binaryPath,
       ...(input.homePath ? { homePath: input.homePath } : {}),
     }),
     encoding: "utf8",

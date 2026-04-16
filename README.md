@@ -23,4 +23,24 @@ We are not accepting contributions yet.
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 
+## Linux AppImage Builds
+
+Linux AppImage packaging is supported from the workspace root:
+
+```bash
+bun run dist:desktop:linux
+```
+
+If `bun install` fails while rebuilding native dependencies such as `node-pty`, make sure Bun is using the `node-gyp` from the same Node toolchain as your active `node` and `npm` binaries:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential python3 make g++ pkg-config libx11-dev libxkbfile-dev
+npm install -g node-gyp
+npm_config_node_gyp="$(npm config get prefix)/bin/node-gyp" bun install
+bun run dist:desktop:linux
+```
+
+The desktop app auto-detects common Codex CLI installs on Linux, including NVM-managed installs, so packaged builds do not need a separate wrapper script just to launch Codex.
+
 Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).

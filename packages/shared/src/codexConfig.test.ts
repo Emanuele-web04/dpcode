@@ -1,13 +1,19 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import OS from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  applyCodexBinaryToPath,
+  findCodexBinaryPath,
   parseCodexConfigActiveProviderEnvKey,
   parseCodexConfigModelProvider,
   parseCodexConfigProviderEnvKey,
+  readConfiguredCodexBinaryPath,
+  readConfiguredCodexHomePath,
   readActiveCodexProviderEnvKey,
+  resolveCodexBinaryPath,
+  resolveCodexHome,
 } from "./codexConfig";
 
 const tempDirs: string[] = [];
@@ -21,6 +27,12 @@ function makeTempCodexHome(configContent?: string): string {
   }
 
   return tempDir;
+}
+
+function writeExecutable(filePath: string, content = "#!/bin/sh\nexit 0\n"): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content, "utf8");
+  chmodSync(filePath, 0o755);
 }
 
 afterEach(() => {
@@ -111,5 +123,78 @@ describe("readActiveCodexProviderEnvKey", () => {
   it("returns undefined when config.toml is missing", () => {
     const codexHome = makeTempCodexHome();
     expect(readActiveCodexProviderEnvKey({ CODEX_HOME: codexHome })).toBeUndefined();
+  });
+});
+
+describe("resolveCodexBinaryPath", () => {
+  it("reads CODEX_BINARY_PATH when configured", () => {
+    expect(resolveCodexBinaryPath({ CODEX_BINARY_PATH: "/home/harrjyot/codex-wrapper.sh" })).toBe(
+      "/home/harrjyot/codex-wrapper.sh",
+    );
+  });
+
+  it("falls back to codex when no override is configured", () => {
+    expect(resolveCodexBinaryPath({})).toBe("codex");
+  });
+
+  it("finds codex on PATH before scanning toolchain directories", () => {
+    const home = makeTempCodexHome();
+    const codexPath = join(home, "bin", "codex");
+    writeExecutable(codexPath);
+
+    expect(resolveCodexBinaryPath({ HOME: home, PATH: join(home, "bin") })).toBe(codexPath);
+  });
+
+  it("finds codex in the newest installed nvm node version", () => {
+    const home = makeTempCodexHome();
+    const olderCodexPath = join(home, ".nvm", "versions", "node", "v20.18.0", "bin", "codex");
+    const newerCodexPath = join(home, ".nvm", "versions", "node", "v22.22.2", "bin", "codex");
+    writeExecutable(olderCodexPath);
+    writeExecutable(newerCodexPath);
+
+    expect(findCodexBinaryPath({ HOME: home, PATH: "/usr/bin" })).toBe(newerCodexPath);
+  });
+
+  it("exposes the raw configured override", () => {
+    expect(readConfiguredCodexBinaryPath({ CODEX_BINARY_PATH: " /tmp/custom-codex " })).toBe(
+      "/tmp/custom-codex",
+    );
+  });
+});
+
+describe("applyCodexBinaryToPath", () => {
+  it("prepends the codex binary directory when an absolute path is used", () => {
+    expect(
+      applyCodexBinaryToPath(
+        { PATH: "/usr/bin" },
+        "/home/test/.nvm/versions/node/v22.22.2/bin/codex",
+      ),
+    ).toEqual({
+      PATH: "/home/test/.nvm/versions/node/v22.22.2/bin:/usr/bin",
+    });
+  });
+
+  it("leaves PATH unchanged for bare command names", () => {
+    expect(applyCodexBinaryToPath({ PATH: "/usr/bin" }, "codex")).toEqual({ PATH: "/usr/bin" });
+  });
+});
+
+describe("resolveCodexHome", () => {
+  it("prefers CODEX_HOME when it is configured", () => {
+    expect(
+      resolveCodexHome({ CODEX_HOME: "/tmp/codex-home", CODEX_HOME_PATH: "/tmp/ignored" }),
+    ).toBe("/tmp/codex-home");
+  });
+
+  it("falls back to CODEX_HOME_PATH for desktop/server overrides", () => {
+    expect(resolveCodexHome({ CODEX_HOME_PATH: "/tmp/codex-home-path" })).toBe(
+      "/tmp/codex-home-path",
+    );
+  });
+
+  it("exposes the configured home override without defaulting", () => {
+    expect(readConfiguredCodexHomePath({ CODEX_HOME_PATH: " /tmp/codex-home-path " })).toBe(
+      "/tmp/codex-home-path",
+    );
   });
 });

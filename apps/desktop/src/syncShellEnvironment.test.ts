@@ -100,6 +100,25 @@ describe("syncShellEnvironment", () => {
     expect(env.SSH_AUTH_SOCK).toBe("/tmp/ssh.sock");
   });
 
+  it("can prefer the inherited Linux environment to avoid blocking startup", () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/bin/zsh",
+      PATH: "/usr/bin",
+      SSH_AUTH_SOCK: "/tmp/inherited.sock",
+    };
+    const readEnvironment = vi.fn();
+
+    syncShellEnvironment(env, {
+      platform: "linux",
+      preferInheritedEnvironmentOnLinux: true,
+      readEnvironment,
+    });
+
+    expect(readEnvironment).not.toHaveBeenCalled();
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.SSH_AUTH_SOCK).toBe("/tmp/inherited.sock");
+  });
+
   it("falls back to a user login shell when SHELL is missing", () => {
     const env: NodeJS.ProcessEnv = {
       PATH: "/usr/bin",

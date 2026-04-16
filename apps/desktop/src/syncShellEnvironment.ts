@@ -28,6 +28,7 @@ export function syncShellEnvironment(
   env: NodeJS.ProcessEnv = process.env,
   options: {
     platform?: NodeJS.Platform;
+    preferInheritedEnvironmentOnLinux?: boolean;
     readEnvironment?: ShellEnvironmentReader;
     readLaunchctlPath?: typeof readPathFromLaunchctl;
     userShell?: string;
@@ -36,6 +37,9 @@ export function syncShellEnvironment(
 ): void {
   const platform = options.platform ?? process.platform;
   if (platform !== "darwin" && platform !== "linux") return;
+  if (platform === "linux" && options.preferInheritedEnvironmentOnLinux && env.PATH?.trim()) {
+    return;
+  }
 
   const logWarning = options.logWarning ?? logShellEnvironmentWarning;
   const readEnvironment = options.readEnvironment ?? readEnvironmentFromLoginShell;

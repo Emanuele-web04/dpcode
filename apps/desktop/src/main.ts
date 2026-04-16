@@ -56,8 +56,6 @@ import {
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
 
-syncShellEnvironment();
-
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
@@ -91,6 +89,9 @@ const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+syncShellEnvironment(process.env, {
+  preferInheritedEnvironmentOnLinux: !isDevelopment,
+});
 const APP_DISPLAY_NAME = isDevelopment ? "DP Code (Dev)" : "DP Code (Alpha)";
 const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.dpcode.dev" : "com.t3tools.dpcode";
 const USER_DATA_DIR_NAME = isDevelopment ? "t3code-dev" : "t3code";
@@ -1679,29 +1680,26 @@ async function bootstrap(): Promise<void> {
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
 
-  if (isDevelopment) {
-    mainWindow = createWindow();
-    writeDesktopLogHeader("bootstrap main window created");
-    void waitForBackendHttpReady(backendHttpUrl)
-      .then(() => {
-        writeDesktopLogHeader("bootstrap backend ready");
-      })
-      .catch((error) => {
-        if (isBackendReadinessAborted(error)) {
-          return;
-        }
-        writeDesktopLogHeader(
-          `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
-        );
-        console.warn("[desktop] backend readiness check timed out during dev bootstrap", error);
-      });
-    return;
-  }
-
-  await waitForBackendHttpReady(backendHttpUrl);
-  writeDesktopLogHeader("bootstrap backend ready");
   mainWindow = createWindow();
   writeDesktopLogHeader("bootstrap main window created");
+  void waitForBackendHttpReady(backendHttpUrl)
+    .then(() => {
+      writeDesktopLogHeader("bootstrap backend ready");
+    })
+    .catch((error) => {
+      if (isBackendReadinessAborted(error)) {
+        return;
+      }
+      writeDesktopLogHeader(
+        `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
+      );
+      console.warn(
+        isDevelopment
+          ? "[desktop] backend readiness check timed out during dev bootstrap"
+          : "[desktop] backend readiness check timed out during packaged bootstrap",
+        error,
+      );
+    });
 }
 
 app.on("before-quit", () => {

@@ -5,7 +5,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
-import { resolveCodexHome } from "@t3tools/shared/codexConfig";
+import { resolveCodexBinaryPath, resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -342,10 +342,11 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       );
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, codexHomePath);
+      const codexBinaryPath = resolveCodexBinaryPath(process.env);
 
       const runCodexCommand = Effect.gen(function* () {
         const command = ChildProcess.make(
-          "codex",
+          codexBinaryPath,
           [
             "exec",
             "--ephemeral",
@@ -364,7 +365,10 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ],
           {
             cwd,
-            env: buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
+            env: buildCodexProcessEnv({
+              binaryPath: codexBinaryPath,
+              homePath: isolatedCodexHome.homePath,
+            }),
             shell: process.platform === "win32",
             stdin: {
               stream: Stream.make(new TextEncoder().encode(prompt)),
