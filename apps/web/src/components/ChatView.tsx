@@ -279,14 +279,14 @@ import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
-  resolveHandoffTargetProvider,
+  resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { buildNextProviderOptions } from "../providerModelOptions";
+import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -382,7 +382,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Turn a raw model slug like "gpt-5.3-codex-spark" into "GPT-5.3 Codex Spark". */
+/** Turn a raw model slug into a display label. */
 function formatModelSlug(slug: string): string {
   return slug
     .replace(/^gpt-/i, "GPT-")
@@ -1120,11 +1120,7 @@ export default function ChatView({
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(
-    () => ({
-      provider: selectedProvider,
-      model: selectedModel,
-      ...(selectedModelOptionsForDispatch ? { options: selectedModelOptionsForDispatch } : {}),
-    }),
+    () => buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch),
     [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
   );
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
@@ -1133,6 +1129,12 @@ export default function ChatView({
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const geminiDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "gemini",
+      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+    }),
+  );
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1141,13 +1143,13 @@ export default function ChatView({
     const staticOptions = getCustomModelOptionsByProvider(settings);
     const result = { ...staticOptions };
 
-    // Merge dynamic models for each provider when available from the SDK
     const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
       claudeAgent: claudeDynamicModelsQuery.data,
       codex: codexDynamicModelsQuery.data,
+      gemini: geminiDynamicModelsQuery.data,
     };
 
-    for (const provider of ["claudeAgent", "codex"] as const) {
+    for (const provider of ["claudeAgent", "codex", "gemini"] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
         result[provider] = mergeDynamicModelOptions({
@@ -1162,7 +1164,12 @@ export default function ChatView({
     }
 
     return result;
-  }, [settings, claudeDynamicModelsQuery.data, codexDynamicModelsQuery.data]);
+  }, [
+    settings,
+    claudeDynamicModelsQuery.data,
+    codexDynamicModelsQuery.data,
+    geminiDynamicModelsQuery.data,
+  ]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -1267,17 +1274,14 @@ export default function ChatView({
   const handoffBadgeTargetProvider = activeThread?.handoff
     ? activeThread.modelSelection.provider
     : null;
-  const handoffTargetProvider = useMemo(
+  const handoffTargetProviders = useMemo(
     () =>
-      activeThread ? resolveHandoffTargetProvider(activeThread.modelSelection.provider) : null,
+      activeThread
+        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider)
+        : [],
     [activeThread],
   );
-  const handoffActionLabel = useMemo(() => {
-    if (!activeThread) {
-      return "Create handoff thread";
-    }
-    return `Handoff to ${PROVIDER_DISPLAY_NAMES[handoffTargetProvider ?? "codex"]}`;
-  }, [activeThread, handoffTargetProvider]);
+  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
@@ -1861,29 +1865,37 @@ export default function ChatView({
       selectedMentionCount: selectedComposerMentions.length,
       interactionMode,
     });
-  const selectedDynamicAgents = useMemo(
-    () =>
-      selectedProvider === "claudeAgent"
-        ? (claudeDynamicAgentsQuery.data?.agents ?? [])
-        : (codexDynamicAgentsQuery.data?.agents ?? []),
-    [selectedProvider, claudeDynamicAgentsQuery.data?.agents, codexDynamicAgentsQuery.data?.agents],
-  );
-  const dynamicAgents = useMemo(
-    () =>
-      selectedDynamicAgents.map((agent) =>
-        agent.description
-          ? {
-              name: agent.name,
-              displayName: agent.displayName,
-              description: agent.description,
-            }
-          : {
-              name: agent.name,
-              displayName: agent.displayName,
-            },
-      ),
-    [selectedDynamicAgents],
-  );
+  const dynamicAgents = useMemo(() => {
+    if (selectedProvider === "claudeAgent") {
+      return (claudeDynamicAgentsQuery.data?.agents ?? []).map((agent) => {
+        const next: { name: string; displayName: string; description?: string } = {
+          name: agent.name,
+          displayName: agent.displayName,
+        };
+        if (agent.description) {
+          next.description = agent.description;
+        }
+        return next;
+      });
+    }
+    if (selectedProvider === "codex") {
+      return (codexDynamicAgentsQuery.data?.agents ?? []).map((agent) => {
+        const next: { name: string; displayName: string; description?: string } = {
+          name: agent.name,
+          displayName: agent.displayName,
+        };
+        if (agent.description) {
+          next.description = agent.description;
+        }
+        return next;
+      });
+    }
+    return [];
+  }, [
+    selectedProvider,
+    claudeDynamicAgentsQuery.data?.agents,
+    codexDynamicAgentsQuery.data?.agents,
+  ]);
   const normalComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger: effectiveComposerTrigger,
     provider: selectedProvider,
@@ -3694,14 +3706,14 @@ export default function ChatView({
     if (voiceProviderStatus?.authStatus === "unauthenticated") {
       toastManager.add({
         type: "error",
-        title: "Sign in to ChatGPT in Codex before using voice notes.",
+        title: "Sign in to ChatGPT for the OpenAI provider before using voice notes.",
       });
       return;
     }
     if (!canStartVoiceNotes) {
       toastManager.add({
         type: "error",
-        title: "Voice notes require a ChatGPT-authenticated Codex session.",
+        title: "Voice notes require a ChatGPT-authenticated OpenAI session.",
       });
       return;
     }
@@ -3808,7 +3820,7 @@ export default function ChatView({
         type: "error",
         title: authExpired ? "Sign in to ChatGPT again" : "Couldn't transcribe voice note",
         description: authExpired
-          ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
+          ? "Voice transcription uses your ChatGPT session for the OpenAI provider. That session was rejected, so sign in again there and retry."
           : description,
         ...(authExpired
           ? {
@@ -4029,24 +4041,27 @@ export default function ChatView({
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
 
-  const onCreateHandoffThread = useCallback(async () => {
-    if (!activeThread || handoffDisabled) {
-      return;
-    }
+  const onCreateHandoffThread = useCallback(
+    async (targetProvider: ProviderKind) => {
+      if (!activeThread || handoffDisabled) {
+        return;
+      }
 
-    try {
-      await createThreadHandoff(activeThread);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not create handoff thread",
-        description:
-          error instanceof Error
-            ? error.message
-            : "An error occurred while creating the handoff thread.",
-      });
-    }
-  }, [activeThread, createThreadHandoff, handoffDisabled]);
+      try {
+        await createThreadHandoff(activeThread, targetProvider);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not create handoff thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while creating the handoff thread.",
+        });
+      }
+    },
+    [activeThread, createThreadHandoff, handoffDisabled],
+  );
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
@@ -4473,18 +4488,15 @@ export default function ChatView({
           titleSeed = GENERIC_CHAT_THREAD_TITLE;
         }
       }
-      // Keep the optimistic label short while the server asks Codex for a better summary.
+      // Keep the optimistic label short while the server asks the provider for a better summary.
       const title = buildPromptThreadTitleFallback(titleSeed);
-      const threadCreateModelSelection: ModelSelection = {
-        provider: selectedProviderForSend,
-        model:
-          selectedModelForSend ||
+      const threadCreateModelSelection: ModelSelection = buildModelSelection(
+        selectedProviderForSend,
+        selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
-        ...(selectedModelSelectionForSend.options
-          ? { options: selectedModelSelectionForSend.options }
-          : {}),
-      };
+        selectedModelSelectionForSend.options,
+      );
 
       if (isLocalDraftThread) {
         await api.orchestration.dispatchCommand({
@@ -6419,7 +6431,7 @@ export default function ChatView({
           handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
-          handoffActionTargetProvider={handoffTargetProvider}
+          handoffActionTargetProviders={handoffTargetProviders}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={resolvedBrowserOpen}

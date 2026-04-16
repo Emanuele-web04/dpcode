@@ -4,7 +4,10 @@
 // Depends on: shared trait resolution helpers, provider model option updates, and shared menu primitives.
 
 import { type ProviderKind, type ThreadId } from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
+import {
+  applyClaudePromptEffortPrefix,
+  geminiModelOptionsFromEffortValue,
+} from "@t3tools/shared/model";
 import { memo, useCallback, useState } from "react";
 import { IoFlash } from "react-icons/io5";
 import { ChevronDownIcon } from "~/lib/icons";
@@ -75,10 +78,14 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         return;
       }
       const effortKey = provider === "codex" ? "reasoningEffort" : "effort";
+      const nextModelOptionsPatch =
+        provider === "gemini"
+          ? (geminiModelOptionsFromEffortValue(nextOption.value) ?? {})
+          : { [effortKey]: nextOption.value };
       setProviderModelOptions(
         threadId,
         provider,
-        buildNextProviderOptions(provider, modelOptions, { [effortKey]: nextOption.value }),
+        buildNextProviderOptions(provider, modelOptions, nextModelOptionsPatch),
         { ...(model !== undefined ? { model } : {}), persistSticky: true },
       );
     },

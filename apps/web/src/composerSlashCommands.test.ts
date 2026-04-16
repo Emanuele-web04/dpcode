@@ -188,7 +188,19 @@ describe("composerSlashCommands", () => {
     ).toEqual([]);
   });
 
-  it("only offers /compact when Codex compaction is available", () => {
+  it("exposes shared app slash commands for gemini", () => {
+    expect(
+      getAvailableComposerSlashCommands({
+        provider: "gemini",
+        supportsFastSlashCommand: false,
+        canOfferCompactCommand: false,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+      }),
+    ).toEqual(["clear", "model", "plan", "default", "review", "fork", "status", "subagents"]);
+  });
+
+  it("only offers /compact when compaction is available", () => {
     expect(
       getAvailableComposerSlashCommands({
         provider: "codex",

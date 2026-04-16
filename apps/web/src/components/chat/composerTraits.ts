@@ -6,10 +6,12 @@
 import {
   type ClaudeModelOptions,
   type CodexModelOptions,
+  type GeminiModelOptions,
   type ProviderKind,
 } from "@t3tools/contracts";
 import {
   getDefaultEffort,
+  getGeminiThinkingSelectionValue,
   getDefaultContextWindow,
   getModelCapabilities,
   hasEffortLevel,
@@ -22,12 +24,17 @@ import type { ProviderOptions } from "../../providerModelOptions";
 
 function getRawEffort(
   provider: ProviderKind,
+  model: string | null | undefined,
   modelOptions: ProviderOptions | null | undefined,
 ): string | null {
   if (provider === "codex") {
     return trimOrNull((modelOptions as CodexModelOptions | undefined)?.reasoningEffort);
   }
-  return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
+  if (provider === "claudeAgent") {
+    return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
+  }
+  const caps = getModelCapabilities(provider, model);
+  return getGeminiThinkingSelectionValue(caps, modelOptions as GeminiModelOptions | undefined);
 }
 
 function getRawContextWindow(
@@ -50,8 +57,8 @@ export function getComposerTraitSelection(
   const caps = getModelCapabilities(provider, model);
   const effortLevels = caps.reasoningEffortLevels;
   const defaultEffort = getDefaultEffort(caps);
+  const resolvedEffort = getRawEffort(provider, model, modelOptions);
   const defaultContextWindow = getDefaultContextWindow(caps);
-  const resolvedEffort = getRawEffort(provider, modelOptions);
   const resolvedContextWindow = getRawContextWindow(provider, modelOptions);
   const isPromptInjected = resolvedEffort
     ? caps.promptInjectedEffortLevels.includes(resolvedEffort)
