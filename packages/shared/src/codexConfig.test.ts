@@ -128,8 +128,8 @@ describe("readActiveCodexProviderEnvKey", () => {
 
 describe("resolveCodexBinaryPath", () => {
   it("reads CODEX_BINARY_PATH when configured", () => {
-    expect(resolveCodexBinaryPath({ CODEX_BINARY_PATH: "/home/harrjyot/codex-wrapper.sh" })).toBe(
-      "/home/harrjyot/codex-wrapper.sh",
+    expect(resolveCodexBinaryPath({ CODEX_BINARY_PATH: "/opt/custom/bin/codex" })).toBe(
+      "/opt/custom/bin/codex",
     );
   });
 
