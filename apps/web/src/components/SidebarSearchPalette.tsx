@@ -5,7 +5,7 @@
  * keyboard navigation and shortcut labels behave like the rest of the app.
  */
 import { SearchIcon, SettingsIcon, SquarePenIcon } from "~/lib/icons";
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind } from "@t3tools/contracts";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft } from "react-icons/lu";
@@ -212,10 +212,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     projects: matchedProjects,
     threads: matchedThreads,
   });
-  const importIdKind = importProvider === "claudeAgent" ? "session" : "thread";
-  const importFieldLabel = importIdKind === "session" ? "Session ID" : "Thread ID";
-  const importPlaceholder = `Paste a ${PROVIDER_DISPLAY_NAMES[importProvider]} ${importIdKind} id`;
-  const importHelpText = `${PROVIDER_DISPLAY_NAMES[importProvider]} resumes a persisted ${importIdKind} by ${importIdKind} id.`;
+  const importFieldLabel = importProvider === "claudeAgent" ? "Session ID" : "Thread ID";
+  const importPlaceholder =
+    importProvider === "claudeAgent" ? "Paste a Claude session id" : "Paste a Codex thread id";
 
   const submitImport = async () => {
     const normalizedImportId = importId.trim();
@@ -276,7 +275,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     onClick={() => setImportProvider("codex")}
                   >
                     <ProviderIcon provider="codex" />
-                    {PROVIDER_DISPLAY_NAMES.codex}
+                    Codex
                   </Button>
                   <Button
                     className={
@@ -288,7 +287,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     onClick={() => setImportProvider("claudeAgent")}
                   >
                     <ProviderIcon provider="claudeAgent" />
-                    {PROVIDER_DISPLAY_NAMES.claudeAgent}
+                    Claude
                   </Button>
                 </div>
               </div>
@@ -309,7 +308,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     }
                   }}
                 />
-                <p className="text-xs text-muted-foreground">{importHelpText}</p>
+                <p className="text-xs text-muted-foreground">
+                  {importProvider === "claudeAgent"
+                    ? "Claude resumes a persisted session by session id."
+                    : "Codex resumes a persisted thread by thread id."}
+                </p>
               </div>
               {importError ? (
                 <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">

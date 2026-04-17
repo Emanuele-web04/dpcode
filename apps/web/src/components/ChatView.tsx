@@ -279,7 +279,7 @@ import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
+  resolveHandoffTargetProvider,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import {
@@ -382,7 +382,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Turn a raw model slug into a display label. */
+/** Turn a raw model slug like "gpt-5.3-codex-spark" into "GPT-5.3 Codex Spark". */
 function formatModelSlug(slug: string): string {
   return slug
     .replace(/^gpt-/i, "GPT-")
@@ -1274,14 +1274,17 @@ export default function ChatView({
   const handoffBadgeTargetProvider = activeThread?.handoff
     ? activeThread.modelSelection.provider
     : null;
-  const handoffTargetProviders = useMemo(
+  const handoffTargetProvider = useMemo(
     () =>
-      activeThread
-        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider)
-        : [],
+      activeThread ? resolveHandoffTargetProvider(activeThread.modelSelection.provider) : null,
     [activeThread],
   );
-  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
+  const handoffActionLabel = useMemo(() => {
+    if (!activeThread) {
+      return "Create handoff thread";
+    }
+    return `Handoff to ${PROVIDER_DISPLAY_NAMES[handoffTargetProvider ?? "codex"]}`;
+  }, [activeThread, handoffTargetProvider]);
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
@@ -3706,14 +3709,14 @@ export default function ChatView({
     if (voiceProviderStatus?.authStatus === "unauthenticated") {
       toastManager.add({
         type: "error",
-        title: "Sign in to ChatGPT for the OpenAI provider before using voice notes.",
+        title: "Sign in to ChatGPT in Codex before using voice notes.",
       });
       return;
     }
     if (!canStartVoiceNotes) {
       toastManager.add({
         type: "error",
-        title: "Voice notes require a ChatGPT-authenticated OpenAI session.",
+        title: "Voice notes require a ChatGPT-authenticated Codex session.",
       });
       return;
     }
@@ -3820,7 +3823,7 @@ export default function ChatView({
         type: "error",
         title: authExpired ? "Sign in to ChatGPT again" : "Couldn't transcribe voice note",
         description: authExpired
-          ? "Voice transcription uses your ChatGPT session for the OpenAI provider. That session was rejected, so sign in again there and retry."
+          ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
           : description,
         ...(authExpired
           ? {
@@ -4041,27 +4044,24 @@ export default function ChatView({
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
 
-  const onCreateHandoffThread = useCallback(
-    async (targetProvider: ProviderKind) => {
-      if (!activeThread || handoffDisabled) {
-        return;
-      }
+  const onCreateHandoffThread = useCallback(async () => {
+    if (!activeThread || handoffDisabled) {
+      return;
+    }
 
-      try {
-        await createThreadHandoff(activeThread, targetProvider);
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
-        });
-      }
-    },
-    [activeThread, createThreadHandoff, handoffDisabled],
-  );
+    try {
+      await createThreadHandoff(activeThread);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not create handoff thread",
+        description:
+          error instanceof Error
+            ? error.message
+            : "An error occurred while creating the handoff thread.",
+      });
+    }
+  }, [activeThread, createThreadHandoff, handoffDisabled]);
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
@@ -4488,7 +4488,7 @@ export default function ChatView({
           titleSeed = GENERIC_CHAT_THREAD_TITLE;
         }
       }
-      // Keep the optimistic label short while the server asks the provider for a better summary.
+      // Keep the optimistic label short while the server asks Codex for a better summary.
       const title = buildPromptThreadTitleFallback(titleSeed);
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
         selectedProviderForSend,
@@ -6431,7 +6431,7 @@ export default function ChatView({
           handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
-          handoffActionTargetProviders={handoffTargetProviders}
+          handoffActionTargetProvider={handoffTargetProvider}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={resolvedBrowserOpen}

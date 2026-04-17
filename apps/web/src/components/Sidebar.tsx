@@ -170,8 +170,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
-  resolveHandoffProviderLabel,
+  resolveHandoffTargetProvider,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -1581,7 +1580,7 @@ export default function Sidebar() {
   ]);
 
   const handleImportThread = useCallback(
-    async (provider: ProviderKind, externalId: string) => {
+    async (provider: "codex" | "claudeAgent", externalId: string) => {
       const api = readNativeApi();
       if (!api) {
         throw new Error("The app server is unavailable.");
@@ -1609,8 +1608,10 @@ export default function Sidebar() {
       const createdAt = new Date().toISOString();
       const trimmedExternalId = externalId.trim();
       const suffix = trimmedExternalId.slice(-8);
-      const importIdKind = provider === "claudeAgent" ? "session" : "thread";
-      const title = `Imported ${PROVIDER_DISPLAY_NAMES[provider]} ${importIdKind}${suffix ? ` ${suffix}` : ""}`;
+      const title =
+        provider === "claudeAgent"
+          ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
+          : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -1931,9 +1932,9 @@ export default function Sidebar() {
     },
   });
   const handoffThread = useCallback(
-    async (thread: Thread, targetProvider: ProviderKind) => {
+    async (thread: Thread) => {
       try {
-        await createThreadHandoff(thread, targetProvider);
+        await createThreadHandoff(thread);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -2257,13 +2258,9 @@ export default function Sidebar() {
         hasPendingApprovals,
         hasPendingUserInput,
       });
-      const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders(thread.modelSelection.provider)
-        : [];
-      const handoffItems = handoffTargets.map((provider) => ({
-        id: `handoff:${provider}`,
-        label: `Handoff to ${resolveHandoffProviderLabel(provider)}`,
-      }));
+      const handoffLabel = canHandoff
+        ? `Handoff to ${PROVIDER_DISPLAY_NAMES[resolveHandoffTargetProvider(thread.modelSelection.provider)]}`
+        : null;
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
         projectCwd: projectCwdById.get(thread.projectId) ?? null,
         envMode: thread.envMode,
@@ -2274,7 +2271,7 @@ export default function Sidebar() {
           { id: "rename", label: "Rename thread" },
           { id: "toggle-pin", label: isPinned ? "Unpin thread" : "Pin thread" },
           { id: "mark-unread", label: "Mark unread" },
-          ...handoffItems,
+          ...(handoffLabel ? [{ id: "handoff", label: handoffLabel }] : []),
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           ...(options?.extraItems ?? []),
@@ -2299,11 +2296,8 @@ export default function Sidebar() {
         markThreadUnread(threadId);
         return;
       }
-      if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
-        const targetProvider = clicked.slice("handoff:".length);
-        if (handoffTargets.includes(targetProvider as ProviderKind)) {
-          await handoffThread(thread, targetProvider as ProviderKind);
-        }
+      if (clicked === "handoff") {
+        await handoffThread(thread);
         return;
       }
       if (clicked === "copy-path") {
@@ -4414,8 +4408,8 @@ export default function Sidebar() {
       {
         id: "import-thread",
         label: "Import thread from...",
-        description: "Attach a local thread to an existing provider thread or session.",
-        keywords: ["import", "resume", "thread", "session", "gpt", "openai", "claude", "gemini"],
+        description: "Attach a local thread to an existing Codex or Claude session.",
+        keywords: ["import", "resume", "thread", "session", "codex", "claude"],
         shortcutLabel: importThreadShortcutLabel,
       },
       {
@@ -5212,7 +5206,7 @@ function SidebarSearchPaletteController(props: {
   onAddProject: () => void;
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
-  onImportThread: (provider: ProviderKind, externalId: string) => Promise<void>;
+  onImportThread: (provider: "codex" | "claudeAgent", externalId: string) => Promise<void>;
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
