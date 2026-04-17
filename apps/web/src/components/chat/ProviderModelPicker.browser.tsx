@@ -68,7 +68,7 @@ describe("ProviderModelPicker", () => {
 
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
-        expect(text).toContain("OpenAI");
+        expect(text).toContain("GPT");
         expect(text).toContain("Claude");
         expect(text).not.toContain("Claude Sonnet 4.6");
       });
@@ -91,7 +91,7 @@ describe("ProviderModelPicker", () => {
         const text = document.body.textContent ?? "";
         expect(text).toContain("Claude Sonnet 4.6");
         expect(text).toContain("Claude Haiku 4.5");
-        expect(text).not.toContain("OpenAI");
+        expect(text).not.toContain("GPT");
       });
     } finally {
       await mounted.cleanup();
@@ -146,7 +146,7 @@ describe("ProviderModelPicker", () => {
 
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
-        expect(text).toContain("OpenAI");
+        expect(text).toContain("GPT");
         expect(text).toContain("Claude");
         expect(text).toContain("Sign in");
       });

@@ -16,7 +16,7 @@ describe("resolveTerminalCloseTitle", () => {
     expect(
       resolveTerminalCloseTitle({
         terminalId: "terminal-1",
-        terminalLabelsById: { "terminal-1": "OpenAI 1" },
+        terminalLabelsById: { "terminal-1": "GPT 1" },
         terminalTitleOverridesById: { "terminal-1": "Deploy shell" },
       }),
     ).toBe("Deploy shell");
@@ -26,10 +26,10 @@ describe("resolveTerminalCloseTitle", () => {
     expect(
       resolveTerminalCloseTitle({
         terminalId: "terminal-1",
-        terminalLabelsById: { "terminal-1": "OpenAI 1" },
+        terminalLabelsById: { "terminal-1": "GPT 1" },
         terminalTitleOverridesById: {},
       }),
-    ).toBe("OpenAI 1");
+    ).toBe("GPT 1");
   });
 });
 
@@ -51,12 +51,12 @@ describe("buildTerminalCloseConfirmationMessage", () => {
   it("warns when closing the last placeholder terminal also deletes the thread", () => {
     expect(
       buildTerminalCloseConfirmationMessage({
-        terminalTitle: "OpenAI 1",
+        terminalTitle: "GPT 1",
         willDeleteThread: true,
       }),
     ).toBe(
       [
-        'Close terminal "OpenAI 1"?',
+        'Close terminal "GPT 1"?',
         "This permanently clears the terminal history for this tab and deletes the empty terminal thread.",
       ].join("\n"),
     );

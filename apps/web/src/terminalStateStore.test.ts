@@ -248,7 +248,7 @@ describe("terminalStateStore actions", () => {
     );
     expect(terminalState.terminalLabelsById).toEqual({
       default: "Terminal 1",
-      "terminal-2": "OpenAI 1",
+      "terminal-2": "GPT 1",
     });
     expect(terminalState.terminalCliKindsById).toEqual({ "terminal-2": "codex" });
 

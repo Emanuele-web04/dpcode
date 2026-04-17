@@ -1651,11 +1651,11 @@ describe("hasLiveTurnTailWork", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("lists OpenAI, Claude, and Gemini as available providers", () => {
+  it("lists GPT, Claude, and Gemini as available providers", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
     expect(PROVIDER_OPTIONS).toEqual([
-      { value: "codex", label: "OpenAI", available: true },
+      { value: "codex", label: "GPT", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "gemini", label: "Gemini", available: true },
     ]);

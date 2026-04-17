@@ -144,7 +144,7 @@ function clearTerminalReviewState(
 }
 
 function generatedTerminalTitleBase(cliKind: TerminalCliKind | null): string {
-  if (cliKind === "codex") return "OpenAI";
+  if (cliKind === "codex") return "GPT";
   if (cliKind === "claude") return "Claude";
   return "Terminal";
 }

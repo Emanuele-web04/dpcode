@@ -270,7 +270,7 @@ import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
-  resolveHandoffTargetProvider,
+  resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import {
@@ -1243,17 +1243,14 @@ export default function ChatView({
   const handoffBadgeTargetProvider = activeThread?.handoff
     ? activeThread.modelSelection.provider
     : null;
-  const handoffTargetProvider = useMemo(
+  const handoffTargetProviders = useMemo(
     () =>
-      activeThread ? resolveHandoffTargetProvider(activeThread.modelSelection.provider) : null,
+      activeThread
+        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider)
+        : [],
     [activeThread],
   );
-  const handoffActionLabel = useMemo(() => {
-    if (!activeThread) {
-      return "Create handoff thread";
-    }
-    return `Handoff to ${PROVIDER_DISPLAY_NAMES[handoffTargetProvider ?? "codex"]}`;
-  }, [activeThread, handoffTargetProvider]);
+  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
@@ -4005,24 +4002,27 @@ export default function ChatView({
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
 
-  const onCreateHandoffThread = useCallback(async () => {
-    if (!activeThread || handoffDisabled) {
-      return;
-    }
+  const onCreateHandoffThread = useCallback(
+    async (targetProvider: ProviderKind) => {
+      if (!activeThread || handoffDisabled) {
+        return;
+      }
 
-    try {
-      await createThreadHandoff(activeThread);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not create handoff thread",
-        description:
-          error instanceof Error
-            ? error.message
-            : "An error occurred while creating the handoff thread.",
-      });
-    }
-  }, [activeThread, createThreadHandoff, handoffDisabled]);
+      try {
+        await createThreadHandoff(activeThread, targetProvider);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not create handoff thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while creating the handoff thread.",
+        });
+      }
+    },
+    [activeThread, createThreadHandoff, handoffDisabled],
+  );
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
@@ -5732,7 +5732,7 @@ export default function ChatView({
           handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
-          handoffActionTargetProvider={handoffTargetProvider}
+          handoffActionTargetProviders={handoffTargetProviders}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={resolvedBrowserOpen}

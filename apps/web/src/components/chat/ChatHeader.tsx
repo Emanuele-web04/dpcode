@@ -61,7 +61,7 @@ interface ChatHeaderProps {
   handoffBadgeLabel: string | null;
   handoffActionLabel: string;
   handoffDisabled: boolean;
-  handoffActionTargetProvider: ProviderKind | null;
+  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   browserOpen: boolean;
@@ -82,7 +82,7 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
-  onCreateHandoff: () => void;
+  onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
 }
 
@@ -106,7 +106,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffBadgeLabel,
   handoffActionLabel,
   handoffDisabled,
-  handoffActionTargetProvider,
+  handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   browserOpen,
@@ -227,35 +227,38 @@ export const ChatHeader = memo(function ChatHeader({
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
         {!isDisposableThread && !hideHandoffControls ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  className={compact ? "shrink-0 gap-1" : "shrink-0 gap-1.5"}
-                  aria-label={handoffActionLabel}
-                  disabled={handoffDisabled}
-                  onClick={onCreateHandoff}
-                >
-                  <FiGitBranch className="size-3.5 shrink-0" />
-                  {compact ? (
-                    <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                  ) : (
-                    <span className="truncate font-normal">Hand off to</span>
-                  )}
-                  {renderProviderIcon(handoffActionTargetProvider, "size-3.5 shrink-0")}
-                  {!compact && (
-                    <span className="truncate font-normal">
-                      {PROVIDER_DISPLAY_NAMES[handoffActionTargetProvider ?? "codex"]}
-                    </span>
-                  )}
-                </Button>
-              }
-            />
-            <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
-          </Tooltip>
+          <Menu modal={false}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuTrigger
+                    render={
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className={compact ? "shrink-0 gap-1" : "shrink-0 gap-1.5"}
+                        aria-label={handoffActionLabel}
+                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                      />
+                    }
+                  >
+                    <FiGitBranch className="size-3.5 shrink-0" />
+                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                  </MenuTrigger>
+                }
+              />
+              <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+            </Tooltip>
+            <MenuPopup align="end" side="bottom" className="w-48">
+              {handoffActionTargetProviders.map((provider) => (
+                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
+                  {renderProviderIcon(provider, "size-3.5 shrink-0")}
+                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                </MenuItem>
+              ))}
+            </MenuPopup>
+          </Menu>
         ) : null}
         {/* Keep one shared project-actions controller mounted so both inline and
             compact header menus open the same dialog/state machine. */}

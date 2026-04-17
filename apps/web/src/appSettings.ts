@@ -1,6 +1,11 @@
 import { useCallback } from "react";
 import { Option, Schema } from "effect";
-import { TrimmedNonEmptyString, ProviderKind, type ProviderStartOptions } from "@t3tools/contracts";
+import {
+  TrimmedNonEmptyString,
+  ProviderKind,
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderStartOptions,
+} from "@t3tools/contracts";
 import {
   getDefaultModel,
   getModelOptions,
@@ -102,9 +107,9 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     provider: "codex",
     settingsKey: "customCodexModels",
     defaultSettingsKey: "customCodexModels",
-    title: "OpenAI",
-    description: "Save additional OpenAI model slugs for the picker and `/model` command.",
-    placeholder: "your-openai-model-slug",
+    title: PROVIDER_DISPLAY_NAMES.codex,
+    description: "Save additional GPT model slugs for the picker and `/model` command.",
+    placeholder: "your-gpt-model-slug",
     example: "gpt-6.7-preview",
   },
   claudeAgent: {

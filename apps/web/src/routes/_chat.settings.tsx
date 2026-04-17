@@ -4,6 +4,7 @@
 // Exports: Settings route component for `/settings`
 
 import {
+  PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -127,7 +128,7 @@ type InstallProviderSettings = {
 const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "codex",
-    title: "OpenAI",
+    title: PROVIDER_DISPLAY_NAMES.codex,
     binaryPathKey: "codexBinaryPath",
     binaryPlaceholder: "OpenAI CLI path",
     binaryDescription: (
@@ -851,10 +852,10 @@ function SettingsRouteView() {
                         <OpenAI className="size-3.5" />
                       )}
                       {settings.defaultProvider === "claudeAgent"
-                        ? "Claude"
+                        ? PROVIDER_DISPLAY_NAMES.claudeAgent
                         : settings.defaultProvider === "gemini"
-                          ? "Gemini"
-                          : "OpenAI"}
+                          ? PROVIDER_DISPLAY_NAMES.gemini
+                          : PROVIDER_DISPLAY_NAMES.codex}
                     </span>
                   </SelectValue>
                 </SelectTrigger>
@@ -862,7 +863,7 @@ function SettingsRouteView() {
                   <SelectItem hideIndicator value="codex">
                     <span className="flex items-center gap-2">
                       <OpenAI className="size-3.5" />
-                      OpenAI
+                      {PROVIDER_DISPLAY_NAMES.codex}
                     </span>
                   </SelectItem>
                   <SelectItem hideIndicator value="claudeAgent">

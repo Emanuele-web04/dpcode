@@ -407,7 +407,7 @@ export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(
 // ── Provider display names ────────────────────────────────────────────
 
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
-  codex: "OpenAI",
+  codex: "GPT",
   claudeAgent: "Claude",
   gemini: "Gemini",
 };
