@@ -1,7 +1,9 @@
-import { type ModelSelection } from "@t3tools/contracts";
+import { type ModelSelection, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 import {
   resolveAvailableHandoffTargetProviders,
+  resolveHandoffProviderLabel,
+  resolveThreadHandoffBadgeLabel,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
 
@@ -10,6 +12,25 @@ describe("threadHandoff", () => {
     expect(resolveAvailableHandoffTargetProviders("codex")).toEqual(["claudeAgent", "gemini"]);
     expect(resolveAvailableHandoffTargetProviders("claudeAgent")).toEqual(["codex", "gemini"]);
     expect(resolveAvailableHandoffTargetProviders("gemini")).toEqual(["codex", "claudeAgent"]);
+  });
+
+  it("keeps Codex naming in handoff labels while using provider labels elsewhere", () => {
+    expect(resolveHandoffProviderLabel("codex")).toBe("Codex");
+    expect(resolveHandoffProviderLabel("claudeAgent")).toBe("Claude");
+    expect(resolveHandoffProviderLabel("gemini")).toBe("Gemini");
+  });
+
+  it("uses Codex wording in the handoff badge for codex threads", () => {
+    expect(
+      resolveThreadHandoffBadgeLabel({
+        handoff: {
+          sourceProvider: "codex",
+          importedAt: "2026-04-18T00:00:00.000Z",
+          sourceThreadId: ThreadId.makeUnsafe("thread-source"),
+          bootstrapStatus: "completed",
+        },
+      }),
+    ).toBe("Handoff from Codex");
   });
 
   it("prefers sticky model selection for the chosen handoff target", () => {

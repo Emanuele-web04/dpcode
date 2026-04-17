@@ -52,7 +52,6 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
   type OrchestrationReadModel,
-  PROVIDER_DISPLAY_NAMES,
   ProjectId,
   type ProviderKind,
   ThreadId,
@@ -173,6 +172,7 @@ import { cn } from "~/lib/utils";
 import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
+  resolveHandoffProviderLabel,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -2269,7 +2269,7 @@ export default function Sidebar() {
         : [];
       const handoffItems = handoffTargets.map((provider) => ({
         id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+        label: `Handoff to ${resolveHandoffProviderLabel(provider)}`,
       }));
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
         projectCwd: projectCwdById.get(thread.projectId) ?? null,

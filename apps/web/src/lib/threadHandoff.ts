@@ -25,11 +25,15 @@ export function resolveAvailableHandoffTargetProviders(
   return HANDOFF_PROVIDER_ORDER.filter((provider) => provider !== sourceProvider);
 }
 
+export function resolveHandoffProviderLabel(provider: ProviderKind): string {
+  return provider === "codex" ? "Codex" : PROVIDER_DISPLAY_NAMES[provider];
+}
+
 export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {
   if (!thread.handoff) {
     return null;
   }
-  return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+  return `Handoff from ${resolveHandoffProviderLabel(thread.handoff.sourceProvider)}`;
 }
 
 export function buildThreadHandoffImportedMessages(

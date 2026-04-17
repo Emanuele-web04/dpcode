@@ -6,7 +6,6 @@
 import {
   type EditorId,
   type ProjectScript,
-  PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
@@ -34,6 +33,7 @@ import { usePreferredEditor } from "../../editorPreferences";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { ClaudeAI, Gemini, OpenAI } from "../Icons";
 import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
+import { resolveHandoffProviderLabel } from "../../lib/threadHandoff";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
 const HEADER_COMPACT_BREAKPOINT = 480;
@@ -256,7 +256,7 @@ export const ChatHeader = memo(function ChatHeader({
               {handoffActionTargetProviders.map((provider) => (
                 <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
                   {renderProviderIcon(provider, "size-3.5 shrink-0")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                  <span>Handoff to {resolveHandoffProviderLabel(provider)}</span>
                 </MenuItem>
               ))}
             </MenuPopup>
