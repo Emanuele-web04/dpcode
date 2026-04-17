@@ -353,6 +353,7 @@ interface ComposerDraftStoreState {
     provider: ProviderKind,
     nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
     options?: {
+      model?: string | null;
       persistSticky?: boolean;
     },
   ) => void;
@@ -2335,6 +2336,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           normalizedProvider,
         );
         const providerOpts = normalizedOpts?.[normalizedProvider];
+        const fallbackModel =
+          normalizeModelSlug(options?.model, normalizedProvider) ??
+          getDefaultModel(normalizedProvider);
 
         set((state) => {
           const existing = state.draftsByThreadId[threadId];
@@ -2346,7 +2350,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (providerOpts) {
             nextMap[normalizedProvider] = buildModelSelection(
               normalizedProvider,
-              currentForProvider?.model ?? getDefaultModel(normalizedProvider),
+              currentForProvider?.model ?? fallbackModel,
               providerOpts,
             );
           } else if (currentForProvider?.options) {
@@ -2364,7 +2368,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             const stickyBase =
               nextStickyMap[normalizedProvider] ??
               base.modelSelectionByProvider[normalizedProvider] ??
-              buildModelSelection(normalizedProvider, getDefaultModel(normalizedProvider));
+              buildModelSelection(normalizedProvider, fallbackModel);
             if (providerOpts) {
               nextStickyMap[normalizedProvider] = buildModelSelection(
                 normalizedProvider,

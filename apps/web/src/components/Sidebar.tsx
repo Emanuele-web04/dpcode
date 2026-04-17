@@ -73,7 +73,14 @@ import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import {
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+  splitShortcutLabel,
+  shouldShowThreadJumpHints,
+  threadJumpCommandForIndex,
+  threadJumpIndexFromCommand,
+} from "../keybindings";
 import {
   createAllThreadsSelector,
   createSidebarDisplayThreadsSelector,
@@ -87,9 +94,11 @@ import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { type SidebarThreadSummary, type Thread } from "../types";
+import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { ClaudeAI, Gemini, OpenAI } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
+import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SidebarSearchPalette } from "./SidebarSearchPalette";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -110,8 +119,8 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { Kbd, KbdGroup } from "./ui/kbd";
 import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
-import { ShortcutKbd } from "./ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -139,6 +148,7 @@ import {
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
+  getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
   getUnpinnedThreadsForSidebar,
   resolveProjectStatusIndicator,
@@ -176,6 +186,7 @@ import {
 } from "../splitViewStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
+import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import type {
   SidebarSearchAction,
@@ -200,6 +211,8 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
+const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
+const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
@@ -217,6 +230,55 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function threadJumpLabelMapsEqual(
+  left: ReadonlyMap<ThreadId, string>,
+  right: ReadonlyMap<ThreadId, string>,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [threadId, label] of left) {
+    if (right.get(threadId) !== label) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Resolve the visible numbered-thread hints from the active keybinding config.
+function buildThreadJumpLabelMap(input: {
+  keybindings: ResolvedKeybindingsConfig;
+  platform: string;
+  terminalOpen: boolean;
+  threadJumpCommandByThreadId: ReadonlyMap<
+    ThreadId,
+    NonNullable<ReturnType<typeof threadJumpCommandForIndex>>
+  >;
+}): ReadonlyMap<ThreadId, string> {
+  if (input.threadJumpCommandByThreadId.size === 0) {
+    return EMPTY_THREAD_JUMP_LABELS;
+  }
+
+  const shortcutLabelOptions = {
+    platform: input.platform,
+    context: {
+      terminalFocus: false,
+      terminalOpen: input.terminalOpen,
+    },
+  } as const;
+  const mapping = new Map<ThreadId, string>();
+  for (const [threadId, command] of input.threadJumpCommandByThreadId) {
+    const label = shortcutLabelForCommand(input.keybindings, command, shortcutLabelOptions);
+    if (label) {
+      mapping.set(threadId, label);
+    }
+  }
+  return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
 
 function ProviderGlyph({ provider, className }: { provider: ProviderKind; className?: string }) {
@@ -613,6 +675,8 @@ function SidebarPrimaryAction({
   disabled?: boolean;
   shortcutLabel?: string | null;
 }) {
+  const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
+
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
@@ -628,12 +692,14 @@ function SidebarPrimaryAction({
           <Icon className="size-[15px]" />
         </span>
         <span className="truncate">{label}</span>
-        {shortcutLabel ? (
-          <ShortcutKbd
-            shortcutLabel={shortcutLabel}
-            groupClassName="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100"
-            className="h-4.5 min-w-4.5 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground/72"
-          />
+        {shortcutParts.length > 0 ? (
+          <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
+            <KbdGroup>
+              {shortcutParts.map((part) => (
+                <Kbd key={part}>{part}</Kbd>
+              ))}
+            </KbdGroup>
+          </span>
         ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -866,9 +932,15 @@ export default function Sidebar() {
   const routeThreadSummary = routeThreadId
     ? (sidebarThreadSummaryById[routeThreadId] ?? null)
     : null;
-  const terminalOpen = routeThreadId
-    ? selectThreadTerminalState(terminalStateByThreadId, routeThreadId).terminalOpen
-    : false;
+  const routeTerminalState = routeThreadId
+    ? selectThreadTerminalState(terminalStateByThreadId, routeThreadId)
+    : null;
+  const terminalOpen = routeTerminalState?.terminalOpen ?? false;
+  const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
+    activeProjectExists: routeThreadSummary !== null,
+    presentationMode: routeTerminalState?.presentationMode ?? "drawer",
+    terminalOpen,
+  });
   const splitViews = useMemo(
     () =>
       Object.values(splitViewsById).filter(
@@ -2532,6 +2604,62 @@ export default function Sidebar() {
     sortedProjects,
   ]);
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
+  const threadJumpCommandByThreadId = useMemo(() => {
+    const mapping = new Map<ThreadId, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
+    for (const [visibleThreadIndex, threadId] of visibleSidebarThreadIds.entries()) {
+      const jumpCommand = threadJumpCommandForIndex(visibleThreadIndex);
+      if (!jumpCommand) {
+        break;
+      }
+      mapping.set(threadId, jumpCommand);
+    }
+
+    return mapping;
+  }, [visibleSidebarThreadIds]);
+  const threadJumpThreadIds = useMemo(
+    () => [...threadJumpCommandByThreadId.keys()],
+    [threadJumpCommandByThreadId],
+  );
+  const getCurrentSidebarShortcutContext = useCallback(
+    () => ({
+      terminalFocus: isTerminalFocused(),
+      terminalOpen,
+      terminalWorkspaceOpen,
+    }),
+    [terminalOpen, terminalWorkspaceOpen],
+  );
+  const [threadJumpLabelByThreadId, setThreadJumpLabelByThreadId] =
+    useState<ReadonlyMap<ThreadId, string>>(EMPTY_THREAD_JUMP_LABELS);
+  const threadJumpLabelsRef = useRef<ReadonlyMap<ThreadId, string>>(EMPTY_THREAD_JUMP_LABELS);
+  threadJumpLabelsRef.current = threadJumpLabelByThreadId;
+  const [showThreadJumpHints, setShowThreadJumpHints] = useState(false);
+  const showThreadJumpHintsRef = useRef(false);
+  showThreadJumpHintsRef.current = showThreadJumpHints;
+  const visibleThreadJumpLabelByThreadId = showThreadJumpHints
+    ? threadJumpLabelByThreadId
+    : EMPTY_THREAD_JUMP_LABELS;
+  const visibleThreadJumpLabelPartsByThreadId = useMemo(() => {
+    const partsByThreadId = new Map<ThreadId, readonly string[]>();
+    for (const [threadId, label] of visibleThreadJumpLabelByThreadId) {
+      partsByThreadId.set(threadId, splitShortcutLabel(label));
+    }
+    return partsByThreadId;
+  }, [visibleThreadJumpLabelByThreadId]);
+
+  useEffect(() => {
+    const threadIdsToPrewarm = getSidebarThreadIdsToPrewarm({
+      visibleThreadIds: visibleSidebarThreadIds,
+    });
+    const releaseCallbacks = threadIdsToPrewarm.map((threadId) =>
+      retainThreadDetailSubscription(threadId),
+    );
+
+    return () => {
+      for (const release of releaseCallbacks) {
+        release();
+      }
+    };
+  }, [visibleSidebarThreadIds]);
 
   // Pinned rows should show the user-facing project label, not the raw folder basename.
   function resolvePinnedThreadProjectLabel(projectId: ProjectId): string | null {
@@ -2616,7 +2744,15 @@ export default function Sidebar() {
       thread,
       includeHandoffBadge: true,
     });
+    const threadStatus = resolveThreadStatusPill({
+      thread,
+      hasPendingApprovals: thread.hasPendingApprovals,
+      hasPendingUserInput: thread.hasPendingUserInput,
+    });
     const isSubagentThread = Boolean(thread.parentThreadId);
+    const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
+    const threadJumpLabelParts =
+      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     const pinnedTimestampClassName = isSubagentThread
       ? "w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
       : "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
@@ -2648,16 +2784,19 @@ export default function Sidebar() {
             });
           }}
         >
-          <ThreadPinToggleButton
-            pinned
-            presentation="inline"
-            toneClassName="text-muted-foreground/50"
-            onToggle={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              togglePinnedThread(thread.id);
-            }}
-          />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <ThreadPinToggleButton
+              pinned
+              presentation="inline"
+              toneClassName="text-muted-foreground/50"
+              onToggle={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                togglePinnedThread(thread.id);
+              }}
+            />
+            {threadStatus?.pulse ? <ThreadRunningSpinner presentation="inline" /> : null}
+          </div>
           {threadEntryPoint === "terminal" ? (
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
           ) : (
@@ -2711,7 +2850,14 @@ export default function Sidebar() {
                   {rightMetaBadge?.icon}
                 </ThreadRowMetaBadge>
               ) : null}
-              {!isPendingArchiveConfirmation ? (
+              {!isPendingArchiveConfirmation && threadJumpLabel ? (
+                <KbdGroup>
+                  {threadJumpLabelParts.map((part) => (
+                    <Kbd key={part}>{part}</Kbd>
+                  ))}
+                </KbdGroup>
+              ) : null}
+              {!isPendingArchiveConfirmation && !threadJumpLabel ? (
                 <span className={pinnedTimestampClassName}>
                   {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
                 </span>
@@ -2779,6 +2925,9 @@ export default function Sidebar() {
     const canToggleSubagents = childCount > 0;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
+    const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
+    const threadJumpLabelParts =
+      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     const childCountLabel = `${childCount} subagent${childCount === 1 ? "" : "s"}`;
     const trailingTimestampClassName = isSubagentThread
       ? cn(
@@ -2810,37 +2959,27 @@ export default function Sidebar() {
             <HiOutlineCheckCircle
               aria-hidden="true"
               className={cn(
-                "pointer-events-none absolute left-2 top-1/2 z-10 size-4 -translate-y-1/2 transition-opacity",
+                "pointer-events-none absolute top-1/2 z-10 size-4 -translate-y-1/2 transition-opacity",
+                isPinned ? "left-8" : "left-2",
                 threadStatus.colorClass,
-                isPinned
-                  ? "opacity-0"
-                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
               )}
             />
           ) : threadStatus.pulse ? (
-            <span
-              aria-hidden="true"
+            <ThreadRunningSpinner
+              presentation="overlay"
               className={cn(
-                "pointer-events-none absolute left-2.5 top-1/2 z-10 size-3 -translate-y-1/2 animate-spin rounded-full text-muted-foreground/55 transition-opacity [animation-duration:1.6s]",
-                isPinned
-                  ? "opacity-0"
-                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                isPinned ? "left-8" : "left-2.5",
+                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
               )}
-              style={{
-                background: "conic-gradient(from 0deg, transparent 25%, currentColor)",
-                mask: "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
-                WebkitMask:
-                  "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
-              }}
             />
           ) : (
             <span
               className={cn(
-                "pointer-events-none absolute left-3 top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
+                "pointer-events-none absolute top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
+                isPinned ? "left-8" : "left-3",
                 threadStatus.dotClass,
-                isPinned
-                  ? "opacity-0"
-                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
               )}
             />
           ))}
@@ -3084,7 +3223,14 @@ export default function Sidebar() {
                   {rightMetaBadge?.icon}
                 </ThreadRowMetaBadge>
               ) : null}
-              {!isPendingArchiveConfirmation ? (
+              {!isPendingArchiveConfirmation && threadJumpLabel ? (
+                <KbdGroup>
+                  {threadJumpLabelParts.map((part) => (
+                    <Kbd key={part}>{part}</Kbd>
+                  ))}
+                </KbdGroup>
+              ) : null}
+              {!isPendingArchiveConfirmation && !threadJumpLabel ? (
                 <span className={trailingTimestampClassName}>
                   {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
                 </span>
@@ -3560,6 +3706,24 @@ export default function Sidebar() {
   }, [clearSelection, selectedThreadIds.size]);
 
   useEffect(() => {
+    const clearThreadJumpHints = () => {
+      setThreadJumpLabelByThreadId((current) =>
+        current === EMPTY_THREAD_JUMP_LABELS ? current : EMPTY_THREAD_JUMP_LABELS,
+      );
+      setShowThreadJumpHints(false);
+    };
+    const shouldIgnoreThreadJumpHintUpdate = (event: KeyboardEvent) =>
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key !== "Meta" &&
+      event.key !== "Control" &&
+      event.key !== "Alt" &&
+      event.key !== "Shift" &&
+      !showThreadJumpHintsRef.current &&
+      threadJumpLabelsRef.current === EMPTY_THREAD_JUMP_LABELS;
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
 
@@ -3582,16 +3746,52 @@ export default function Sidebar() {
         return;
       }
 
+      const shortcutContext = getCurrentSidebarShortcutContext();
+      if (!shouldIgnoreThreadJumpHintUpdate(event)) {
+        const shouldShowHints = shouldShowThreadJumpHints(event, keybindings, {
+          platform: navigator.platform,
+          context: shortcutContext,
+        });
+        if (!shouldShowHints) {
+          if (
+            showThreadJumpHintsRef.current ||
+            threadJumpLabelsRef.current !== EMPTY_THREAD_JUMP_LABELS
+          ) {
+            clearThreadJumpHints();
+          }
+        } else {
+          setThreadJumpLabelByThreadId((current) => {
+            const nextLabelMap = buildThreadJumpLabelMap({
+              keybindings,
+              platform: navigator.platform,
+              terminalOpen: shortcutContext.terminalOpen,
+              threadJumpCommandByThreadId,
+            });
+            return threadJumpLabelMapsEqual(current, nextLabelMap) ? current : nextLabelMap;
+          });
+          setShowThreadJumpHints(true);
+        }
+      }
+
       const command = resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: isTerminalFocused(),
-          terminalOpen,
-        },
+        context: shortcutContext,
       });
       if (command === "sidebar.search") {
         event.preventDefault();
         event.stopPropagation();
         setSearchPaletteOpen((prev) => !prev);
+        return;
+      }
+      const jumpIndex = threadJumpIndexFromCommand(command ?? "");
+      if (jumpIndex !== null) {
+        const threadJumpTargetId = threadJumpThreadIds[jumpIndex];
+        if (!threadJumpTargetId) {
+          return;
+        }
+        if (threadJumpTargetId === activeSidebarThreadId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        activateThread(threadJumpTargetId);
         return;
       }
       if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
@@ -3609,18 +3809,50 @@ export default function Sidebar() {
       event.stopPropagation();
       activateThread(nextThreadId);
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (shouldIgnoreThreadJumpHintUpdate(event)) {
+        return;
+      }
+      const shortcutContext = getCurrentSidebarShortcutContext();
+      const shouldShowHints = shouldShowThreadJumpHints(event, keybindings, {
+        platform: navigator.platform,
+        context: shortcutContext,
+      });
+      if (!shouldShowHints) {
+        clearThreadJumpHints();
+        return;
+      }
+      setThreadJumpLabelByThreadId((current) => {
+        const nextLabelMap = buildThreadJumpLabelMap({
+          keybindings,
+          platform: navigator.platform,
+          terminalOpen: shortcutContext.terminalOpen,
+          threadJumpCommandByThreadId,
+        });
+        return threadJumpLabelMapsEqual(current, nextLabelMap) ? current : nextLabelMap;
+      });
+      setShowThreadJumpHints(true);
+    };
+    const onWindowBlur = () => {
+      clearThreadJumpHints();
+    };
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
+    window.addEventListener("blur", onWindowBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("keyup", onKeyUp, { capture: true });
+      window.removeEventListener("blur", onWindowBlur);
     };
   }, [
     activateThread,
     activeSidebarThreadId,
     handleStartAddProject,
-    isOnWorkspace,
     keybindings,
-    terminalOpen,
+    getCurrentSidebarShortcutContext,
+    threadJumpCommandByThreadId,
+    threadJumpThreadIds,
     visibleSidebarThreadIds,
   ]);
 

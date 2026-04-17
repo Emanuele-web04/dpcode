@@ -74,17 +74,16 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         onPromptChange(nextPrompt);
         return;
       }
+      const effortKey = provider === "codex" ? "reasoningEffort" : "effort";
       const nextModelOptionsPatch =
         provider === "gemini"
           ? (geminiModelOptionsFromEffortValue(nextOption.value) ?? {})
-          : provider === "codex"
-            ? { reasoningEffort: nextOption.value }
-            : { effort: nextOption.value };
+          : { [effortKey]: nextOption.value };
       setProviderModelOptions(
         threadId,
         provider,
         buildNextProviderOptions(provider, modelOptions, nextModelOptionsPatch),
-        { persistSticky: true },
+        { ...(model !== undefined ? { model } : {}), persistSticky: true },
       );
     },
     [
@@ -96,6 +95,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       effortLevels,
       prompt,
       caps.promptInjectedEffortLevels,
+      model,
       provider,
     ],
   );
@@ -139,7 +139,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 threadId,
                 provider,
                 buildNextProviderOptions(provider, modelOptions, { thinking: value === "on" }),
-                { persistSticky: true },
+                { ...(model !== undefined ? { model } : {}), persistSticky: true },
               );
             }}
           >
@@ -160,7 +160,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                   threadId,
                   provider,
                   buildNextProviderOptions(provider, modelOptions, { fastMode: value === "on" }),
-                  { persistSticky: true },
+                  { ...(model !== undefined ? { model } : {}), persistSticky: true },
                 );
               }}
             >
