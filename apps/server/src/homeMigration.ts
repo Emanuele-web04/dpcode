@@ -2,10 +2,8 @@
  * FILE: homeMigration.ts
  * Purpose: Imports legacy ~/.t3 state into the new ~/.dpcode home on first startup.
  * Layer: Startup utility
- * Depends on: config path derivation, Effect filesystem/path services, and node:sqlite snapshots
+ * Depends on: config path derivation, Effect filesystem/path services, and lazy node:sqlite snapshots
  */
-import { DatabaseSync } from "node:sqlite";
-
 import { Data, Effect, FileSystem, Path } from "effect";
 
 import { deriveServerPaths } from "./config";
@@ -42,6 +40,10 @@ interface LegacyHomeMigrationInput {
   readonly devUrl: URL | undefined;
 }
 
+interface LegacyHomeMigrationDependencies {
+  readonly loadDatabaseSync?: () => Promise<DatabaseSyncConstructor>;
+}
+
 interface MigrationMarker {
   readonly status: MigrationMarkerStatus;
   readonly sourceBaseDir: string;
@@ -55,6 +57,25 @@ interface MigrationMarker {
 }
 
 const IMPORTABLE_ARTIFACTS = ["database", "keybindings", "attachments", "anonymousId"] as const;
+
+type DatabaseSyncInstance = {
+  readonly exec: (sql: string) => void;
+  readonly close: () => void;
+};
+
+type DatabaseSyncConstructor = new (
+  path: string,
+  options?: { readonly readOnly?: boolean },
+) => DatabaseSyncInstance;
+
+let cachedDatabaseSyncConstructor: Promise<DatabaseSyncConstructor> | undefined;
+
+const loadDatabaseSync = () => {
+  cachedDatabaseSyncConstructor ??= import("node:sqlite").then(
+    (module) => module.DatabaseSync as unknown as DatabaseSyncConstructor,
+  );
+  return cachedDatabaseSyncConstructor;
+};
 
 const writeMigrationMarker = (markerPath: string, marker: MigrationMarker) =>
   Effect.gen(function* () {
@@ -118,9 +139,14 @@ const readMigrationMarker = (markerPath: string) =>
     } satisfies MigrationMarker;
   });
 
-const snapshotSqliteDatabase = (sourcePath: string, targetPath: string) =>
-  Effect.try({
-    try: () => {
+const snapshotSqliteDatabase = (
+  sourcePath: string,
+  targetPath: string,
+  loadDatabaseSyncFn: () => Promise<DatabaseSyncConstructor> = loadDatabaseSync,
+) =>
+  Effect.tryPromise({
+    try: async () => {
+      const DatabaseSync = await loadDatabaseSyncFn();
       const escapedTargetPath = targetPath.replaceAll("'", "''");
       const sourceDb = new DatabaseSync(sourcePath, { readOnly: true });
       try {
@@ -177,7 +203,10 @@ const cleanUpStagingDir = (stagingBaseDir: string) =>
     yield* fs.remove(stagingBaseDir, { recursive: true }).pipe(Effect.catch(() => Effect.void));
   });
 
-export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeMigrationInput) {
+export const migrateLegacyHomeIfNeeded = Effect.fn(function* (
+  input: LegacyHomeMigrationInput,
+  dependencies?: LegacyHomeMigrationDependencies,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const canonicalTargetBaseDir = path.resolve(path.join(input.homeDir, DPCODE_HOME_DIRNAME));
@@ -282,7 +311,11 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     );
 
     if (pendingArtifacts.has("database")) {
-      yield* snapshotSqliteDatabase(sourcePaths.dbPath, stagingPaths.dbPath);
+      yield* snapshotSqliteDatabase(
+        sourcePaths.dbPath,
+        stagingPaths.dbPath,
+        dependencies?.loadDatabaseSync,
+      );
     }
     if (pendingArtifacts.has("keybindings")) {
       yield* stageFileCopy(sourcePaths.keybindingsConfigPath, stagingPaths.keybindingsConfigPath);

@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -53,6 +54,50 @@ const readMarker = (markerPath: string) =>
   };
 
 it.layer(NodeServices.layer)("homeMigration", (it) => {
+  it("can be imported by Bun without eagerly requiring node:sqlite", () => {
+    const result = spawnSync(
+      "bun",
+      [
+        "--eval",
+        "import('./homeMigration.ts').then(() => process.exit(0)).catch((error) => { console.error(error); process.exit(1); });",
+      ],
+      {
+        cwd: import.meta.dirname,
+        encoding: "utf8",
+      },
+    );
+
+    assert.strictEqual(result.status, 0, result.stderr || result.stdout || "Bun import failed.");
+  });
+
+  it.effect("skips non-default homes without loading sqlite bindings", () =>
+    Effect.gen(function* () {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-home-migration-"));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
+      );
+
+      const result = yield* migrateLegacyHomeIfNeeded(
+        {
+          baseDir: path.join(tempHome, "custom-home"),
+          homeDir: tempHome,
+          devUrl: undefined,
+        },
+        {
+          loadDatabaseSync: async () => {
+            throw new Error("should not load sqlite bindings when migration is skipped");
+          },
+        },
+      );
+
+      assert.deepStrictEqual(result, {
+        status: "skipped",
+        reason: "non-default-home",
+        importedArtifacts: [],
+      });
+    }),
+  );
+
   it.effect("imports legacy userdata into the new default home", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
