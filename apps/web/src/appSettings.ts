@@ -9,6 +9,11 @@ import {
 } from "@t3tools/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
+import {
+  type ThemeAppearanceConfig,
+  ThemeAppearanceConfigSchema,
+  ThemeAppearanceSelectionId,
+} from "./themeAppearance";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
@@ -29,6 +34,7 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "upda
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+export const DEFAULT_THEME_APPEARANCE_SELECTION_ID = "default" as const;
 type CustomModelSettingsKey = "customCodexModels" | "customClaudeModels" | "customGeminiModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
@@ -85,6 +91,18 @@ export const AppSettingsSchema = Schema.Struct({
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  lightThemeAppearance: ThemeAppearanceSelectionId.pipe(
+    withDefaults(() => DEFAULT_THEME_APPEARANCE_SELECTION_ID),
+  ),
+  darkThemeAppearance: ThemeAppearanceSelectionId.pipe(
+    withDefaults(() => DEFAULT_THEME_APPEARANCE_SELECTION_ID),
+  ),
+  lightImportedThemeAppearance: Schema.NullOr(ThemeAppearanceConfigSchema).pipe(
+    withDefaults(() => null),
+  ),
+  darkImportedThemeAppearance: Schema.NullOr(ThemeAppearanceConfigSchema).pipe(
+    withDefaults(() => null),
+  ),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
@@ -173,6 +191,24 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
   };
+}
+
+export function patchThemeAppearanceSelection(
+  mode: "light" | "dark",
+  selection: AppSettings["lightThemeAppearance"],
+): Partial<Pick<AppSettings, "lightThemeAppearance" | "darkThemeAppearance">> {
+  return mode === "light"
+    ? { lightThemeAppearance: selection }
+    : { darkThemeAppearance: selection };
+}
+
+export function patchImportedThemeAppearance(
+  mode: "light" | "dark",
+  config: ThemeAppearanceConfig | null,
+): Partial<Pick<AppSettings, "lightImportedThemeAppearance" | "darkImportedThemeAppearance">> {
+  return mode === "light"
+    ? { lightImportedThemeAppearance: config }
+    : { darkImportedThemeAppearance: config };
 }
 
 export function getCustomModelsForProvider(

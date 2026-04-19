@@ -32,6 +32,7 @@ import {
   IconEye,
   IconFile,
   IconFlask2,
+  IconDeviceDesktop,
   IconFolder,
   IconFolderOpen,
   IconGitCompare,
@@ -52,6 +53,7 @@ import {
   IconMinimize,
   IconMessageCircle,
   IconMicrophone,
+  IconMoon,
   IconPalette,
   IconPaperclip,
   IconPin,
@@ -66,6 +68,7 @@ import {
   IconSearch,
   IconSelector,
   IconSettings,
+  IconSun,
   IconTerminal,
   IconTerminal2,
   IconTextWrap,
@@ -126,6 +129,7 @@ export const CloudUploadIcon = adaptIcon(IconCloudUpload);
 export const Columns2Icon = adaptIcon(IconColumns2);
 export const CopyIcon = adaptIcon(IconCopy);
 export const DiffIcon = adaptIcon(IconGitCompare);
+export const DesktopIcon = adaptIcon(IconDeviceDesktop);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);
@@ -164,6 +168,7 @@ export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MicIcon = adaptIcon(IconMicrophone);
+export const MoonIcon = adaptIcon(IconMoon);
 export const PanelLeftCloseIcon = adaptIcon(IconLayoutSidebarLeftCollapse);
 export const PanelLeftIcon = adaptIcon(IconLayoutSidebarLeftExpand);
 export const PanelRightCloseIcon = adaptIcon(IconLayoutSidebarRightCollapse);
@@ -193,6 +198,7 @@ export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
 export const Undo2Icon = adaptIcon(IconArrowBackUp);
+export const SunIcon = adaptIcon(IconSun);
 export const WrenchIcon = adaptIcon(IconTool);
 export const WorktreeIcon: LucideIcon = (props) => (
   <LuSplit

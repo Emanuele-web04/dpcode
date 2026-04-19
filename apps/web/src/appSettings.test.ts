@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   AppSettingsSchema,
   DEFAULT_CHAT_FONT_SIZE_PX,
+  DEFAULT_THEME_APPEARANCE_SELECTION_ID,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
@@ -317,6 +318,10 @@ describe("AppSettingsSchema", () => {
       customCodexModels: [],
       customClaudeModels: [],
       customGeminiModels: [],
+      lightThemeAppearance: DEFAULT_THEME_APPEARANCE_SELECTION_ID,
+      darkThemeAppearance: DEFAULT_THEME_APPEARANCE_SELECTION_ID,
+      lightImportedThemeAppearance: null,
+      darkImportedThemeAppearance: null,
     });
   });
 });

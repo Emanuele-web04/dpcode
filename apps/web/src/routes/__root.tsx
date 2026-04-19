@@ -48,6 +48,9 @@ import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import { useRetainedThreadDetailIds } from "../threadDetailSubscriptionRetention";
 import { useAppTypography } from "../hooks/useAppTypography";
+import { useChatCodeFont } from "../hooks/useChatCodeFont";
+import { useThemeAppearance } from "../hooks/useThemeAppearance";
+import { useUIFont } from "../hooks/useUIFont";
 import { invalidateGitQueries } from "../lib/gitReactQuery";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
@@ -64,6 +67,9 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   useAppTypography();
+  useThemeAppearance();
+  useUIFont();
+  useChatCodeFont();
 
   if (!readNativeApi()) {
     return (
