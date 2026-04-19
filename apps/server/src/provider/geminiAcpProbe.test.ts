@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeGeminiCapabilityProbeResult } from "./geminiAcpProbe";
+import { normalizeGeminiCapabilityProbeResult, parseGeminiAcpProbeError } from "./geminiAcpProbe";
 
 describe("normalizeGeminiCapabilityProbeResult", () => {
   it("treats authenticated ACP sessions without model discovery as ready", () => {
@@ -42,5 +42,21 @@ describe("normalizeGeminiCapabilityProbeResult", () => {
     };
 
     expect(normalizeGeminiCapabilityProbeResult(result)).toEqual(result);
+  });
+});
+
+describe("parseGeminiAcpProbeError", () => {
+  it("returns actionable guidance for authentication errors", () => {
+    expect(
+      parseGeminiAcpProbeError({
+        code: -32_000,
+        message: "Authentication required: auth method not configured.",
+      }),
+    ).toEqual({
+      status: "error",
+      auth: { status: "unauthenticated" },
+      message:
+        "Gemini is not authenticated. Open `gemini` and choose Sign in with Google, or configure `GEMINI_API_KEY` / Vertex AI credentials. Authentication required: auth method not configured.",
+    });
   });
 });

@@ -86,6 +86,36 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.providerOptions?.claudeAgent?.maxThinkingTokens).toBe(12_000);
     expect(parsed.runtimeMode).toBe("full-access");
   });
+
+  it("accepts Gemini runtime knobs and official preview models", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "gemini",
+      cwd: "/tmp/workspace",
+      modelSelection: {
+        provider: "gemini",
+        model: "gemini-3-pro-preview",
+        options: {
+          thinkingLevel: "MEDIUM",
+        },
+      },
+      providerOptions: {
+        gemini: {
+          binaryPath: "/usr/local/bin/gemini",
+        },
+      },
+      runtimeMode: "approval-required",
+    });
+    expect(parsed.provider).toBe("gemini");
+    expect(parsed.modelSelection?.provider).toBe("gemini");
+    expect(parsed.modelSelection?.model).toBe("gemini-3-pro-preview");
+    if (parsed.modelSelection?.provider !== "gemini") {
+      throw new Error("Expected gemini modelSelection");
+    }
+    expect(parsed.modelSelection.options?.thinkingLevel).toBe("MEDIUM");
+    expect(parsed.providerOptions?.gemini?.binaryPath).toBe("/usr/local/bin/gemini");
+    expect(parsed.runtimeMode).toBe("approval-required");
+  });
 });
 
 describe("ProviderSendTurnInput", () => {
@@ -149,5 +179,24 @@ describe("ProviderSendTurnInput", () => {
       throw new Error("Expected claude modelSelection");
     }
     expect(parsed.modelSelection.options?.effort).toBe("xhigh");
+  });
+
+  it("accepts Gemini modelSelection with expanded thinking controls", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      modelSelection: {
+        provider: "gemini",
+        model: "gemini-2.5-pro",
+        options: {
+          thinkingBudget: 8192,
+        },
+      },
+    });
+
+    expect(parsed.modelSelection?.provider).toBe("gemini");
+    if (parsed.modelSelection?.provider !== "gemini") {
+      throw new Error("Expected gemini modelSelection");
+    }
+    expect(parsed.modelSelection.options?.thinkingBudget).toBe(8192);
   });
 });

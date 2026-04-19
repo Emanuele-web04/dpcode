@@ -61,7 +61,7 @@ function formatGeminiDiscoveryWarning(detail: string): string {
 }
 
 function formatGeminiAuthMessage(detail: string): string {
-  return `Gemini is not authenticated. ${detail}`;
+  return `Gemini is not authenticated. Open \`gemini\` and choose Sign in with Google, or configure \`GEMINI_API_KEY\` / Vertex AI credentials. ${detail}`;
 }
 
 function formatGeminiModelDiscoveryFallbackMessage(): string {

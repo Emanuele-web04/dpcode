@@ -29,7 +29,7 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       available: true,
       status: "warning",
       message:
-        "Gemini uses a custom local binary path in this app. Availability will be confirmed when you start a Gemini session.",
+        "Gemini uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
     });
   });
 
@@ -87,9 +87,27 @@ describe("isProviderUsable", () => {
 
 describe("providerUnavailableReason", () => {
   it("returns provider-specific guidance", () => {
-    expect(providerUnavailableReason({ ...BASE_STATUS, authStatus: "unauthenticated" })).toBe(
-      "Gemini is not authenticated yet.",
-    );
+    expect(
+      providerUnavailableReason({
+        ...BASE_STATUS,
+        authStatus: "unauthenticated",
+        message: undefined,
+      }),
+    ).toBe("Gemini is not authenticated yet.");
     expect(providerUnavailableReason(BASE_STATUS)).toBe(BASE_STATUS.message);
+  });
+
+  it("prefers detailed authentication guidance when the provider exposes one", () => {
+    expect(
+      providerUnavailableReason({
+        ...BASE_STATUS,
+        available: true,
+        authStatus: "unauthenticated",
+        message:
+          "Gemini is not authenticated. Open `gemini` and choose Sign in with Google, or configure `GEMINI_API_KEY` / Vertex AI credentials.",
+      }),
+    ).toBe(
+      "Gemini is not authenticated. Open `gemini` and choose Sign in with Google, or configure `GEMINI_API_KEY` / Vertex AI credentials.",
+    );
   });
 });

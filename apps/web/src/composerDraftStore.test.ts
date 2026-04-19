@@ -124,7 +124,7 @@ function resetComposerDraftStore() {
 }
 
 function modelSelection(
-  provider: "codex" | "claudeAgent",
+  provider: "codex" | "claudeAgent" | "gemini",
   model: string,
   options?: ModelSelection["options"],
 ): ModelSelection {
@@ -617,6 +617,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       envMode: "worktree",
       runtimeMode: "full-access",
       interactionMode: "default",
+      lastKnownPr: null,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toEqual({
@@ -627,6 +628,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       envMode: "worktree",
       runtimeMode: "full-access",
       interactionMode: "default",
+      lastKnownPr: null,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
   });
@@ -888,6 +890,46 @@ describe("composerDraftStore modelSelection", () => {
       modelSelection("codex", "gpt-5.3-codex", {
         reasoningEffort: "xhigh",
         fastMode: true,
+      }),
+    );
+  });
+
+  it("round-trips expanded Gemini reasoning options through persisted draft state", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(
+      threadId,
+      modelSelection("gemini", "gemini-3-pro-preview", {
+        thinkingLevel: "MEDIUM",
+      }),
+    );
+    store.setStickyModelSelection(
+      modelSelection("gemini", "gemini-2.5-pro", {
+        thinkingBudget: 8192,
+      }),
+    );
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState());
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.draftsByThreadId[threadId]?.modelSelectionByProvider.gemini).toEqual(
+      modelSelection("gemini", "gemini-3-pro-preview", {
+        thinkingLevel: "MEDIUM",
+      }),
+    );
+    expect(mergedState.stickyModelSelectionByProvider.gemini).toEqual(
+      modelSelection("gemini", "gemini-2.5-pro", {
+        thinkingBudget: 8192,
       }),
     );
   });

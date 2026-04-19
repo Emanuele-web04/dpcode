@@ -31,9 +31,14 @@ export type GeminiThinkingConfigKind = "budget" | "level";
 
 const GEMINI_3_MODEL_PATTERN = /^(?:auto-)?gemini-3(?:[.-]|$)/i;
 const GEMINI_2_5_MODEL_PATTERN = /^(?:auto-)?gemini-2\.5(?:[.-]|$)/i;
-const GEMINI_THINKING_LEVEL_SET = new Set<GeminiThinkingLevel>(["LOW", "HIGH"]);
+const GEMINI_THINKING_LEVEL_SET = new Set<GeminiThinkingLevel>([
+  "MINIMAL",
+  "LOW",
+  "MEDIUM",
+  "HIGH",
+]);
 const GEMINI_THINKING_BUDGET_MAP = new Map<string, GeminiThinkingBudget>([
-  ["-1", -1],
+  ["8192", 8192],
   ["0", 0],
   ["512", 512],
 ]);
@@ -50,7 +55,9 @@ export const DEFAULT_GEMINI_MODEL_CAPABILITIES = EMPTY_MODEL_CAPABILITIES;
 export const GEMINI_3_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [
     { value: "HIGH", label: "High", isDefault: true },
+    { value: "MEDIUM", label: "Medium" },
     { value: "LOW", label: "Low" },
+    { value: "MINIMAL", label: "Minimal" },
   ],
   supportsFastMode: false,
   supportsThinkingToggle: false,
@@ -60,8 +67,9 @@ export const GEMINI_3_MODEL_CAPABILITIES: ModelCapabilities = {
 
 export const GEMINI_2_5_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [
-    { value: "-1", label: "Dynamic", isDefault: true },
+    { value: "8192", label: "Default (8192 Tokens)", isDefault: true },
     { value: "512", label: "512 Tokens" },
+    { value: "0", label: "0 Tokens" },
   ],
   supportsFastMode: false,
   supportsThinkingToggle: false,
@@ -188,9 +196,7 @@ export function getGeminiThinkingModelAlias(
     return `dpcode-gemini-${base}-thinking-level-${nextOptions.thinkingLevel.toLowerCase()}`;
   }
   if (kind === "budget" && nextOptions.thinkingBudget !== undefined) {
-    const budget =
-      nextOptions.thinkingBudget === -1 ? "dynamic" : String(nextOptions.thinkingBudget);
-    return `dpcode-gemini-${base}-thinking-budget-${budget}`;
+    return `dpcode-gemini-${base}-thinking-budget-${String(nextOptions.thinkingBudget)}`;
   }
   return null;
 }

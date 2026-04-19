@@ -752,7 +752,10 @@ function normalizeProviderModelOptions(
       : undefined;
 
   const geminiThinkingLevel: GeminiThinkingLevel | undefined =
-    geminiCandidate?.thinkingLevel === "LOW" || geminiCandidate?.thinkingLevel === "HIGH"
+    geminiCandidate?.thinkingLevel === "MINIMAL" ||
+    geminiCandidate?.thinkingLevel === "LOW" ||
+    geminiCandidate?.thinkingLevel === "MEDIUM" ||
+    geminiCandidate?.thinkingLevel === "HIGH"
       ? geminiCandidate.thinkingLevel
       : undefined;
   const rawGeminiThinkingBudget =
@@ -762,7 +765,7 @@ function normalizeProviderModelOptions(
         ? Number(geminiCandidate.thinkingBudget)
         : undefined;
   const geminiThinkingBudget: GeminiThinkingBudget | undefined =
-    rawGeminiThinkingBudget === -1 ||
+    rawGeminiThinkingBudget === 8192 ||
     rawGeminiThinkingBudget === 0 ||
     rawGeminiThinkingBudget === 512
       ? rawGeminiThinkingBudget

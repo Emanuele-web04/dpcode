@@ -57,6 +57,14 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("opus-4.6", "claudeAgent")).toBe("claude-opus-4-6");
     expect(normalizeModelSlug("claude-haiku-4-5-20251001", "claudeAgent")).toBe("claude-haiku-4-5");
   });
+
+  it("uses official Gemini aliases and preserves preview model ids", () => {
+    expect(normalizeModelSlug("auto", "gemini")).toBe("auto-gemini-3");
+    expect(normalizeModelSlug("pro", "gemini")).toBe("gemini-3-pro-preview");
+    expect(normalizeModelSlug("flash", "gemini")).toBe("gemini-3-flash-preview");
+    expect(normalizeModelSlug("flash-lite", "gemini")).toBe("gemini-2.5-flash-lite");
+    expect(normalizeModelSlug("gemini-3-pro-preview", "gemini")).toBe("gemini-3-pro-preview");
+  });
 });
 
 describe("resolveModelSlug", () => {
@@ -155,6 +163,22 @@ describe("resolveSelectableModel", () => {
       ]),
     ).toBeNull();
   });
+
+  it("resolves Gemini convenience aliases against the official picker surface", () => {
+    expect(
+      resolveSelectableModel("gemini", "pro", [
+        { slug: "auto-gemini-3", name: "Auto (Gemini 3)" },
+        { slug: "gemini-3-pro-preview", name: "Gemini 3 Pro Preview" },
+        { slug: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
+      ]),
+    ).toBe("gemini-3-pro-preview");
+    expect(
+      resolveSelectableModel("gemini", "flash", [
+        { slug: "auto-gemini-3", name: "Auto (Gemini 3)" },
+        { slug: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
+      ]),
+    ).toBe("gemini-3-flash-preview");
+  });
 });
 
 describe("getModelCapabilities reasoningEffortLevels", () => {
@@ -201,13 +225,24 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
   });
 
   it("keeps Gemini 2.5 Pro and auto 2.5 on supported budgets only", () => {
-    expect(values("gemini", "gemini-2.5-pro")).toEqual(["-1", "512"]);
-    expect(values("gemini", "auto-gemini-2.5")).toEqual(["-1", "512"]);
+    expect(values("gemini", "gemini-2.5-pro")).toEqual(["8192", "512", "0"]);
+    expect(values("gemini", "auto-gemini-2.5")).toEqual(["8192", "512", "0"]);
   });
 
   it("keeps all Gemini 2.5 models on CLI-safe budgets only", () => {
-    expect(values("gemini", "gemini-2.5-flash")).toEqual(["-1", "512"]);
-    expect(values("gemini", "gemini-2.5-flash-lite")).toEqual(["-1", "512"]);
+    expect(values("gemini", "gemini-2.5-flash")).toEqual(["8192", "512", "0"]);
+    expect(values("gemini", "gemini-2.5-flash-lite")).toEqual(["8192", "512", "0"]);
+  });
+
+  it("exposes the full Gemini 3 thinking-level range", () => {
+    expect(values("gemini", "auto-gemini-3")).toEqual(["HIGH", "MEDIUM", "LOW", "MINIMAL"]);
+    expect(values("gemini", "gemini-3-pro-preview")).toEqual(["HIGH", "MEDIUM", "LOW", "MINIMAL"]);
+    expect(values("gemini", "gemini-3-flash-preview")).toEqual([
+      "HIGH",
+      "MEDIUM",
+      "LOW",
+      "MINIMAL",
+    ]);
   });
 
   it("co-locates labels with effort values", () => {
@@ -227,7 +262,8 @@ describe("getDefaultEffort", () => {
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-7"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
-    expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-2.5-flash-lite"))).toBe("-1");
+    expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-2.5-flash-lite"))).toBe("8192");
+    expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-3-pro-preview"))).toBe("HIGH");
   });
 });
 
@@ -374,28 +410,53 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("normalizeGeminiModelOptions", () => {
-  it("drops unsupported thinking-off overrides for the Gemini 2.5 family", () => {
-    expect(normalizeGeminiModelOptions("gemini-2.5-pro", { thinkingBudget: 0 })).toBeUndefined();
-    expect(normalizeGeminiModelOptions("auto-gemini-2.5", { thinkingBudget: 0 })).toBeUndefined();
-    expect(normalizeGeminiModelOptions("gemini-2.5-flash", { thinkingBudget: 0 })).toBeUndefined();
+  it("drops the default Gemini 2.5 budget while preserving documented lower budgets", () => {
+    expect(normalizeGeminiModelOptions("gemini-2.5-pro", { thinkingBudget: 8192 })).toBeUndefined();
     expect(
-      normalizeGeminiModelOptions("gemini-2.5-flash-lite", { thinkingBudget: 0 }),
+      normalizeGeminiModelOptions("auto-gemini-2.5", { thinkingBudget: 8192 }),
     ).toBeUndefined();
+    expect(normalizeGeminiModelOptions("gemini-2.5-flash", { thinkingBudget: 512 })).toEqual({
+      thinkingBudget: 512,
+    });
+    expect(normalizeGeminiModelOptions("gemini-2.5-flash-lite", { thinkingBudget: 0 })).toEqual({
+      thinkingBudget: 0,
+    });
+  });
+
+  it("preserves the expanded Gemini 3 thinking levels when they differ from the default", () => {
+    expect(
+      normalizeGeminiModelOptions("gemini-3-pro-preview", { thinkingLevel: "HIGH" }),
+    ).toBeUndefined();
+    expect(
+      normalizeGeminiModelOptions("gemini-3-pro-preview", { thinkingLevel: "MEDIUM" }),
+    ).toEqual({
+      thinkingLevel: "MEDIUM",
+    });
+    expect(
+      normalizeGeminiModelOptions("gemini-3-pro-preview", { thinkingLevel: "MINIMAL" }),
+    ).toEqual({
+      thinkingLevel: "MINIMAL",
+    });
   });
 });
 
 describe("getGeminiThinkingModelAlias", () => {
-  it("refuses unsupported Gemini 2.5 off aliases", () => {
-    expect(getGeminiThinkingModelAlias("gemini-2.5-pro", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-pro", { thinkingBudget: 0 })).toBe("gemini-2.5-pro");
-    expect(getGeminiThinkingModelAlias("gemini-2.5-flash", { thinkingBudget: 0 })).toBeNull();
+  it("creates aliases for documented Gemini 2.5 budget overrides", () => {
+    expect(getGeminiThinkingModelAlias("gemini-2.5-pro", { thinkingBudget: 512 })).toBe(
+      "dpcode-gemini-gemini-2-5-pro-thinking-budget-512",
+    );
     expect(resolveGeminiApiModelId("gemini-2.5-flash", { thinkingBudget: 0 })).toBe(
-      "gemini-2.5-flash",
+      "dpcode-gemini-gemini-2-5-flash-thinking-budget-0",
     );
-    expect(getGeminiThinkingModelAlias("gemini-2.5-flash-lite", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-flash-lite", { thinkingBudget: 0 })).toBe(
-      "gemini-2.5-flash-lite",
+  });
+
+  it("creates aliases for the expanded Gemini 3 thinking levels", () => {
+    expect(getGeminiThinkingModelAlias("gemini-3-pro-preview", { thinkingLevel: "MEDIUM" })).toBe(
+      "dpcode-gemini-gemini-3-pro-preview-thinking-level-medium",
     );
+    expect(
+      getGeminiThinkingModelAlias("gemini-3-flash-preview", { thinkingLevel: "MINIMAL" }),
+    ).toBe("dpcode-gemini-gemini-3-flash-preview-thinking-level-minimal");
   });
 });
 

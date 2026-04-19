@@ -12,9 +12,9 @@ export const CLAUDE_CODE_EFFORT_OPTIONS = [
   "ultrathink",
 ] as const;
 export type ClaudeCodeEffort = (typeof CLAUDE_CODE_EFFORT_OPTIONS)[number];
-export const GEMINI_THINKING_LEVEL_OPTIONS = ["LOW", "HIGH"] as const;
+export const GEMINI_THINKING_LEVEL_OPTIONS = ["MINIMAL", "LOW", "MEDIUM", "HIGH"] as const;
 export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVEL_OPTIONS)[number];
-export const GEMINI_THINKING_BUDGET_OPTIONS = [-1, 512, 0] as const;
+export const GEMINI_THINKING_BUDGET_OPTIONS = [8192, 512, 0] as const;
 export type GeminiThinkingBudget = (typeof GEMINI_THINKING_BUDGET_OPTIONS)[number];
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
@@ -71,8 +71,22 @@ export type ModelCapabilities = {
 
 const GEMINI_2_5_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [
-    { value: "-1", label: "Dynamic", isDefault: true },
+    { value: "8192", label: "Default (8192 Tokens)", isDefault: true },
     { value: "512", label: "512 Tokens" },
+    { value: "0", label: "0 Tokens" },
+  ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
+const GEMINI_3_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "HIGH", label: "High", isDefault: true },
+    { value: "MEDIUM", label: "Medium" },
+    { value: "LOW", label: "Low" },
+    { value: "MINIMAL", label: "Minimal" },
   ],
   supportsFastMode: false,
   supportsThinkingToggle: false,
@@ -284,64 +298,33 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   gemini: [
     {
       slug: "auto-gemini-3",
-      name: "Auto Gemini 3",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      name: "Auto (Gemini 3)",
+      capabilities: GEMINI_3_CAPABILITIES,
     },
     {
       slug: "auto-gemini-2.5",
-      name: "Auto Gemini 2.5",
+      name: "Auto (Gemini 2.5)",
       capabilities: GEMINI_2_5_CAPABILITIES,
+    },
+    {
+      slug: "gemini-3-pro-preview",
+      name: "Gemini 3 Pro Preview",
+      capabilities: GEMINI_3_CAPABILITIES,
     },
     {
       slug: "gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: GEMINI_3_CAPABILITIES,
     },
     {
       slug: "gemini-3-flash-preview",
       name: "Gemini 3 Flash Preview",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: GEMINI_3_CAPABILITIES,
     },
     {
       slug: "gemini-3.1-flash-lite-preview",
       name: "Gemini 3.1 Flash Lite Preview",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: GEMINI_3_CAPABILITIES,
     },
     {
       slug: "gemini-2.5-pro",
@@ -406,9 +389,12 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   gemini: {
     auto: "auto-gemini-3",
+    pro: "gemini-3-pro-preview",
+    flash: "gemini-3-flash-preview",
+    "flash-lite": "gemini-2.5-flash-lite",
     "auto-gemini-3": "auto-gemini-3",
     "auto-gemini-2.5": "auto-gemini-2.5",
-    "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+    "gemini-3-pro-preview": "gemini-3-pro-preview",
     "gemini-3.1-pro-preview": "gemini-3.1-pro-preview",
     "gemini-3-flash-preview": "gemini-3-flash-preview",
     "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite-preview",

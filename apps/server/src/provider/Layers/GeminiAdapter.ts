@@ -63,8 +63,13 @@ const GEMINI_TMP_DIR = path.join(os.homedir(), ".gemini", "tmp");
 const GEMINI_CHAT_DIR_NAME = "chats";
 const GEMINI_SESSION_FILE_PREFIX = "session-";
 const DPCODE_GEMINI_SETTINGS_DIR = path.join(os.tmpdir(), "dpcode", "gemini");
-const GEMINI_3_THINKING_LEVELS: ReadonlyArray<GeminiThinkingLevel> = ["HIGH", "LOW"];
-const GEMINI_2_5_THINKING_BUDGETS: ReadonlyArray<GeminiThinkingBudget> = [-1, 512, 0];
+const GEMINI_3_THINKING_LEVELS: ReadonlyArray<GeminiThinkingLevel> = [
+  "HIGH",
+  "MEDIUM",
+  "LOW",
+  "MINIMAL",
+];
+const GEMINI_2_5_THINKING_BUDGETS: ReadonlyArray<GeminiThinkingBudget> = [8192, 512, 0];
 
 type JsonRpcId = number | string;
 type GeminiToolKind =

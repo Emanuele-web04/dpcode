@@ -52,7 +52,7 @@ export function providerUnavailableReason(status: ServerProviderStatus | null | 
   }
   const providerLabel = PROVIDER_DISPLAY_NAMES[status.provider] ?? status.provider;
   if (status.authStatus === "unauthenticated") {
-    return `${providerLabel} is not authenticated yet.`;
+    return status.message ?? `${providerLabel} is not authenticated yet.`;
   }
   if (!status.available) {
     return status.message ?? `${providerLabel} is unavailable right now.`;
