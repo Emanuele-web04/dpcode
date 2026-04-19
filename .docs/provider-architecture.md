@@ -13,7 +13,7 @@ Methods mirror the `NativeApi` interface defined in `@t3tools/contracts`:
 - `providers.respondToRequest`, `providers.stopSession`
 - `shell.openInEditor`, `server.getConfig`
 
-Codex is the only implemented provider. `claudeCode` is reserved in contracts/UI.
+Codex, Claude, and Gemini are implemented provider adapters. Codex uses `codex app-server`, Claude uses the Claude Code runtime integration, and Gemini uses Gemini CLI ACP (`gemini --acp`).
 
 ## Client transport
 

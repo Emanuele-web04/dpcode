@@ -159,7 +159,18 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Gemini binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>gemini</code> from your PATH.
+        Leave blank to use <code>gemini</code> from your PATH. After install, open{" "}
+        <code>gemini</code> and choose Sign in with Google, or configure <code>GEMINI_API_KEY</code>{" "}
+        / Vertex AI per the{" "}
+        <a
+          href="https://www.geminicli.com/docs/get-started/authentication/"
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-4"
+        >
+          official Gemini CLI auth docs
+        </a>
+        .
       </>
     ),
   },
