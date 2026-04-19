@@ -233,6 +233,9 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
       modelOptions,
       prompt,
       includeFastMode,
+      open,
+      onOpenChange,
+      shortcutLabel,
       onPromptChange,
     }) => (
       <TraitsPicker
@@ -241,6 +244,9 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
         model={model}
         modelOptions={modelOptions}
         prompt={prompt}
+        {...(open !== undefined ? { open } : {})}
+        {...(onOpenChange ? { onOpenChange } : {})}
+        {...(shortcutLabel !== undefined ? { shortcutLabel } : {})}
         {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />

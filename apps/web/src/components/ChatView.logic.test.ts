@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  shouldEnableProviderModelsQuery,
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
   hasServerAcknowledgedLocalDispatch,
@@ -115,6 +116,29 @@ describe("voice helpers", () => {
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });
+  });
+});
+
+describe("shouldEnableProviderModelsQuery", () => {
+  it("keeps Gemini model discovery enabled while the provider is still switchable", () => {
+    expect(shouldEnableProviderModelsQuery({ provider: "gemini", lockedProvider: null })).toBe(
+      true,
+    );
+  });
+
+  it("disables Gemini model discovery when another provider has already locked the thread", () => {
+    expect(shouldEnableProviderModelsQuery({ provider: "gemini", lockedProvider: "codex" })).toBe(
+      false,
+    );
+  });
+
+  it("keeps Codex and Claude discovery enabled regardless of the active lock", () => {
+    expect(
+      shouldEnableProviderModelsQuery({ provider: "codex", lockedProvider: "claudeAgent" }),
+    ).toBe(true);
+    expect(
+      shouldEnableProviderModelsQuery({ provider: "claudeAgent", lockedProvider: "codex" }),
+    ).toBe(true);
   });
 });
 

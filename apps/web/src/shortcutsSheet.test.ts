@@ -110,4 +110,36 @@ describe("buildShortcutSheetSections", () => {
       ),
     ).toBe(true);
   });
+
+  it("includes the Gemini thread shortcut when the binding exists", () => {
+    const sections = buildShortcutSheetSections({
+      keybindings: [
+        {
+          command: "chat.newGemini",
+          shortcut: {
+            key: "g",
+            modKey: true,
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: true,
+          },
+        },
+      ],
+      projectScripts: [],
+      platform: "Linux",
+      context: {
+        terminalFocus: false,
+        terminalOpen: false,
+        terminalWorkspaceOpen: false,
+      },
+      isElectron: false,
+    });
+
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.label === "New Gemini thread" && entry.shortcutLabel === "Ctrl+Alt+G",
+      ),
+    ).toBe(true);
+  });
 });
