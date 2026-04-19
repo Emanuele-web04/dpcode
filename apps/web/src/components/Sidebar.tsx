@@ -5153,7 +5153,7 @@ export default function Sidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   size="default"
-                  className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                  className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-black/[0.045] hover:text-foreground dark:hover:bg-white/[0.08]"
                   onClick={() => handleSidebarViewChange("threads")}
                 >
                   <ArrowLeftIcon className="size-[15px]" />
@@ -5188,7 +5188,7 @@ export default function Sidebar() {
                               render={<button type="button" />}
                               size="sm"
                               isActive={isActive}
-                              className="group/settings-nav-item h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent"
+                              className="group/settings-nav-item h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/88 hover:bg-black/[0.045] hover:text-foreground dark:hover:bg-white/[0.08] data-[active=true]:bg-black/[0.055] data-[active=true]:text-foreground dark:data-[active=true]:bg-white/[0.1] [&>svg]:text-foreground/78 hover:[&>svg]:text-foreground data-[active=true]:[&>svg]:text-foreground"
                               onClick={() => {
                                 void navigate({
                                   to: "/settings",

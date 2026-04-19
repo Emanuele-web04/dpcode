@@ -14,20 +14,32 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  DEFAULT_THEME_APPEARANCE_SELECTION_ID,
   MAX_CHAT_FONT_SIZE_PX,
+  type AppSettings,
   getAppModelOptions,
   getCustomModelsForProvider,
   MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
+  patchImportedThemeAppearance,
   patchCustomModels,
+  patchThemeAppearanceSelection,
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { ClaudeAI, Gemini, OpenAI } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPopup,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import {
   Select,
@@ -37,18 +49,24 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
+import { Textarea } from "../components/ui/textarea";
 import { toastManager } from "../components/ui/toast";
+import { Toggle, ToggleGroup } from "../components/ui/toggle-group";
 import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
   ArchiveIcon,
   ChevronDownIcon,
+  DesktopIcon,
+  MoonIcon,
   PlusIcon,
   RotateCcwIcon,
+  SunIcon,
   Undo2Icon,
   XIcon,
 } from "../lib/icons";
@@ -70,27 +88,17 @@ import { useStore } from "../store";
 import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { formatRelativeTime } from "../components/Sidebar";
+import {
+  getThemeAppearanceSelectionOptions,
+  parseThemeAppearanceImport,
+  type ParsedThemeAppearanceImport,
+  resolveThemeAppearanceConfig,
+  type ThemeAppearanceMode,
+  normalizeThemeContrast,
+} from "../themeAppearance";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
-
-const THEME_OPTIONS = [
-  {
-    value: "system",
-    label: "System",
-    description: "Match your OS appearance setting.",
-  },
-  {
-    value: "light",
-    label: "Light",
-    description: "Always use the light theme.",
-  },
-  {
-    value: "dark",
-    label: "Dark",
-    description: "Always use the dark theme.",
-  },
-] as const;
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -252,6 +260,418 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
   );
 }
 
+function ThemeAppearanceDetailRow({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <div className="flex flex-col gap-2 border-t border-border/40 px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="text-[13px] text-foreground">{label}</div>
+      <div className="flex w-full items-center justify-end sm:w-auto">{children}</div>
+    </div>
+  );
+}
+
+function ThemeAppearanceColorControl({
+  ariaLabel,
+  onChange,
+  value,
+}: {
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label className="relative flex w-full cursor-pointer items-center justify-between gap-2.5 rounded-lg border border-border/50 bg-background/50 px-3 py-1.5 text-[13px] text-foreground sm:w-36">
+      <span className="flex items-center gap-2">
+        <span
+          className="size-4 rounded-full border border-black/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.18)]"
+          style={{ backgroundColor: value }}
+        />
+        <span className="font-mono text-[12px] uppercase tracking-[0.04em]">{value}</span>
+      </span>
+      <input
+        aria-label={ariaLabel}
+        className="absolute inset-0 cursor-pointer opacity-0"
+        type="color"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function hexToRgba(value: string, alpha: number): string {
+  const normalized = value.replace("#", "");
+  const expanded =
+    normalized.length === 3
+      ? normalized
+          .split("")
+          .map((part) => `${part}${part}`)
+          .join("")
+      : normalized;
+
+  const red = Number.parseInt(expanded.slice(0, 2), 16);
+  const green = Number.parseInt(expanded.slice(2, 4), 16);
+  const blue = Number.parseInt(expanded.slice(4, 6), 16);
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function getThemeAppearanceBadgeText(label: string): string {
+  const words = label
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .split(/[\s-]+/)
+    .filter(Boolean);
+
+  if (words.length >= 2) {
+    return `${words[0]![0]}${words[1]![0]}`.slice(0, 2);
+  }
+
+  return label.slice(0, 2);
+}
+
+function ThemeAppearanceSelectOption({
+  accent,
+  label,
+  surface,
+}: {
+  accent: string;
+  label: string;
+  surface: string;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span
+        className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-md px-1.5 text-[11px] font-semibold tracking-[0.02em]"
+        style={{
+          backgroundColor: surface,
+          boxShadow: `inset 0 0 0 1px ${hexToRgba(accent, 0.28)}`,
+          color: accent,
+        }}
+      >
+        {getThemeAppearanceBadgeText(label)}
+      </span>
+      <span className="truncate text-[13px] text-foreground/92">{label}</span>
+    </div>
+  );
+}
+
+function ThemeAppearanceEditor({
+  config,
+  contextHint,
+  importedAvailable,
+  mode,
+  onConfigChange,
+  onImportTheme,
+  onReset,
+  onSelectionChange,
+  selection,
+}: {
+  config: NonNullable<AppSettings["lightImportedThemeAppearance"]>;
+  contextHint?: string;
+  importedAvailable: boolean;
+  mode: ThemeAppearanceMode;
+  onConfigChange: (config: NonNullable<AppSettings["lightImportedThemeAppearance"]>) => void;
+  onImportTheme: (parsed: ParsedThemeAppearanceImport) => void;
+  onReset: () => void;
+  onSelectionChange: (value: AppSettings["lightThemeAppearance"]) => void;
+  selection: AppSettings["lightThemeAppearance"];
+}) {
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importValue, setImportValue] = useState("");
+  const options = useMemo(
+    () => getThemeAppearanceSelectionOptions({ hasImportedTheme: importedAvailable, mode }),
+    [importedAvailable, mode],
+  );
+  const resolvedSelection = options.some((option) => option.value === selection)
+    ? selection
+    : DEFAULT_THEME_APPEARANCE_SELECTION_ID;
+  const title = mode === "light" ? "Light theme" : "Dark theme";
+  const selectOptions = useMemo(() => {
+    return options.map((option) => {
+      const optionConfig = resolveThemeAppearanceConfig({
+        importedConfig: option.value === "imported" ? config : null,
+        mode,
+        selection: option.value,
+      });
+
+      return {
+        ...option,
+        accent: optionConfig.accent,
+        ink: optionConfig.ink,
+        surface: optionConfig.surface,
+      };
+    });
+  }, [config, mode, options]);
+  const selectedOption =
+    selectOptions.find((option) => option.value === resolvedSelection) ?? selectOptions[0];
+  const { copyToClipboard, isCopied } = useCopyToClipboard<void>({
+    onCopy: () => {
+      toastManager.add({
+        title: "Theme copied",
+        description: `${title} copied to the clipboard.`,
+      });
+    },
+    onError: () => {
+      toastManager.add({
+        type: "error",
+        title: "Copy failed",
+        description: "Could not copy the theme JSON.",
+      });
+    },
+  });
+
+  const exportPayload = useMemo(() => {
+    const payload = {
+      ...(resolvedSelection !== "default" && resolvedSelection !== "imported"
+        ? { codeThemeId: resolvedSelection }
+        : {}),
+      theme: config,
+      variant: mode,
+    };
+    return `codex-theme-v1:${JSON.stringify(payload)}`;
+  }, [config, mode, resolvedSelection]);
+
+  const applyImport = useCallback(() => {
+    try {
+      const parsed = parseThemeAppearanceImport(importValue, mode);
+      onImportTheme(parsed);
+      setImportError(null);
+      setImportOpen(false);
+      setImportValue("");
+      toastManager.add({
+        title: "Theme imported",
+        description: `${parsed.sourceLabel} applied to the ${
+          parsed.mode === "light" ? "Light" : "Dark"
+        } theme slot.`,
+      });
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Could not import theme.");
+    }
+  }, [importValue, mode, onImportTheme]);
+
+  return (
+    <>
+      <div
+        className="rounded-xl border border-border/50 bg-card/50 px-4 py-4 sm:px-5"
+        data-slot="settings-row"
+      >
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1 space-y-1 sm:max-w-xl">
+            <div className="flex min-h-5 items-center gap-1.5">
+              <h3 className="text-sm font-medium text-foreground">{title}</h3>
+              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                {selection !== DEFAULT_THEME_APPEARANCE_SELECTION_ID ? (
+                  <SettingResetButton label={title.toLowerCase()} onClick={onReset} />
+                ) : null}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {contextHint ?? `Choose a preset or import a ${mode} Codex theme JSON.`}
+            </p>
+          </div>
+
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end sm:pl-4">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="justify-start sm:justify-center"
+              onClick={() => {
+                setImportError(null);
+                setImportOpen(true);
+              }}
+            >
+              Import
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="justify-start sm:justify-center"
+              onClick={() => copyToClipboard(exportPayload, undefined)}
+            >
+              {isCopied ? "Copied" : "Copy theme"}
+            </Button>
+            <Select
+              value={resolvedSelection}
+              onValueChange={(value) => {
+                if (!selectOptions.some((option) => option.value === value)) {
+                  return;
+                }
+                onSelectionChange(value as AppSettings["lightThemeAppearance"]);
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-56" aria-label={`${title} preset`}>
+                <SelectValue>
+                  {selectedOption ? (
+                    <ThemeAppearanceSelectOption
+                      accent={selectedOption.accent}
+                      label={selectedOption.label}
+                      surface={selectedOption.surface}
+                    />
+                  ) : (
+                    "Default"
+                  )}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false} className="p-1.5">
+                {selectOptions.map((option) => (
+                  <SelectItem
+                    hideIndicator
+                    key={option.value}
+                    value={option.value}
+                    className="rounded-lg px-2 py-2"
+                  >
+                    <ThemeAppearanceSelectOption
+                      accent={option.accent}
+                      label={option.label}
+                      surface={option.surface}
+                    />
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </div>
+        </div>
+
+        <div className="mt-3 overflow-hidden rounded-xl border border-border/40 bg-background/20">
+          <ThemeAppearanceDetailRow label="Accent">
+            <ThemeAppearanceColorControl
+              ariaLabel={`${title} accent color`}
+              value={config.accent}
+              onChange={(value) => onConfigChange({ ...config, accent: value })}
+            />
+          </ThemeAppearanceDetailRow>
+
+          <ThemeAppearanceDetailRow label="Background">
+            <ThemeAppearanceColorControl
+              ariaLabel={`${title} background color`}
+              value={config.surface}
+              onChange={(value) => onConfigChange({ ...config, surface: value })}
+            />
+          </ThemeAppearanceDetailRow>
+
+          <ThemeAppearanceDetailRow label="Foreground">
+            <ThemeAppearanceColorControl
+              ariaLabel={`${title} foreground color`}
+              value={config.ink}
+              onChange={(value) => onConfigChange({ ...config, ink: value })}
+            />
+          </ThemeAppearanceDetailRow>
+
+          <ThemeAppearanceDetailRow label="UI font">
+            <Input
+              className="h-8 w-full text-right text-[13px] sm:w-52"
+              value={config.fonts.ui}
+              onChange={(event) =>
+                onConfigChange({
+                  ...config,
+                  fonts: { ...config.fonts, ui: event.target.value },
+                })
+              }
+              placeholder="Inter"
+              spellCheck={false}
+              aria-label={`${title} UI font`}
+            />
+          </ThemeAppearanceDetailRow>
+
+          <ThemeAppearanceDetailRow label="Code font">
+            <Input
+              className="h-8 w-full text-right text-[13px] sm:w-52"
+              value={config.fonts.code}
+              onChange={(event) =>
+                onConfigChange({
+                  ...config,
+                  fonts: { ...config.fonts, code: event.target.value },
+                })
+              }
+              placeholder={'"JetBrains Mono"'}
+              spellCheck={false}
+              aria-label={`${title} code font`}
+            />
+          </ThemeAppearanceDetailRow>
+
+          <ThemeAppearanceDetailRow label="Translucent sidebar">
+            <Switch
+              checked={!config.opaqueWindows}
+              onCheckedChange={(checked) =>
+                onConfigChange({
+                  ...config,
+                  opaqueWindows: !checked,
+                })
+              }
+              aria-label={`${title} translucent sidebar`}
+            />
+          </ThemeAppearanceDetailRow>
+
+          <ThemeAppearanceDetailRow label="Contrast">
+            <div className="flex w-full items-center justify-end gap-3 sm:w-[17rem]">
+              <input
+                aria-label={`${title} contrast`}
+                className="theme-contrast-slider h-5 w-full cursor-pointer"
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={config.contrast}
+                onChange={(event) =>
+                  onConfigChange({
+                    ...config,
+                    contrast: normalizeThemeContrast(Number(event.target.value), config.contrast),
+                  })
+                }
+              />
+              <span className="w-8 text-right text-[13px] text-muted-foreground">
+                {config.contrast}
+              </span>
+            </div>
+          </ThemeAppearanceDetailRow>
+        </div>
+      </div>
+
+      <Dialog
+        open={importOpen}
+        onOpenChange={(open) => {
+          setImportOpen(open);
+          if (!open) {
+            setImportError(null);
+          }
+        }}
+      >
+        <DialogPopup className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import Theme</DialogTitle>
+            <DialogDescription>
+              Paste a `codex-theme-v1` JSON export. If the payload includes a `variant`, it will be
+              applied to the matching light or dark slot automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            aria-label={`Import ${title}`}
+            className="mx-2 w-auto placeholder:text-muted-foreground/22"
+            placeholder={`codex-theme-v1:{"codeThemeId":"catppuccin","theme":{"accent":"#cba6f7","contrast":50,"fonts":{"code":"\\"Geist Mono\\", ui-monospace, \\"SFMono-Regular\\"","ui":"Inter"},"ink":"#cdd6f4","opaqueWindows":false,"semanticColors":{"diffAdded":"#a6e3a1","diffRemoved":"#f38ba8","skill":"#cba6f7"},"surface":"#1e1e2e"},"variant":"${
+              mode === "light" ? "light" : "dark"
+            }"}`}
+            spellCheck={false}
+            value={importValue}
+            onChange={(event) => {
+              setImportValue(event.target.value);
+              if (importError) {
+                setImportError(null);
+              }
+            }}
+          />
+          {importError ? <p className="text-sm text-destructive">{importError}</p> : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImportOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={applyImport}>Import Theme</Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    </>
+  );
+}
+
 function normalizeManagedWorktreePath(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
@@ -264,7 +684,7 @@ function SettingsRouteView() {
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -286,6 +706,37 @@ function SettingsRouteView() {
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
+  const activeThemeAppearanceMode = theme === "system" ? resolvedTheme : theme;
+
+  const handleImportThemeAppearance = useCallback(
+    (parsed: ParsedThemeAppearanceImport) => {
+      updateSettings({
+        ...patchImportedThemeAppearance(parsed.mode, {
+          ...parsed.config,
+          fonts: {
+            code: settings.chatCodeFontFamily,
+            ui: settings.uiFontFamily,
+          },
+        }),
+        ...patchThemeAppearanceSelection(parsed.mode, "imported"),
+      });
+    },
+    [settings.chatCodeFontFamily, settings.uiFontFamily, updateSettings],
+  );
+  const handleThemeAppearanceConfigChange = useCallback(
+    (
+      mode: ThemeAppearanceMode,
+      config: NonNullable<AppSettings["lightImportedThemeAppearance"]>,
+    ) => {
+      updateSettings({
+        ...patchImportedThemeAppearance(mode, config),
+        ...patchThemeAppearanceSelection(mode, "imported"),
+        uiFontFamily: config.fonts.ui,
+        chatCodeFontFamily: config.fonts.code,
+      });
+    },
+    [updateSettings],
+  );
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
@@ -1066,83 +1517,112 @@ function SettingsRouteView() {
     <div className="space-y-6">
       <SettingsSection title="Theme and typography">
         <div className="space-y-2">
-          <SettingsRow
-            title="Theme"
-            description="Choose how DP Code looks across the app."
-            resetAction={
-              theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-              ) : null
-            }
-            control={
-              <Select
-                value={theme}
-                onValueChange={(value) => {
-                  if (value !== "system" && value !== "light" && value !== "dark") return;
-                  setTheme(value);
-                }}
-              >
-                <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
-                  <SelectValue>
-                    {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {THEME_OPTIONS.map((option) => (
-                    <SelectItem hideIndicator key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            }
-          />
+          <div className="rounded-xl border border-border/50 bg-card/50" data-slot="settings-row">
+            <div className="flex flex-col gap-4 px-4 py-3.5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 space-y-0.5">
+                  <div className="flex min-h-5 items-center gap-1.5">
+                    <h3 className="text-sm font-medium text-foreground">Theme</h3>
+                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                      {theme !== "system" ? (
+                        <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+                      ) : null}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Use light, dark, or match your system. The customization panel below follows the
+                    selected mode.
+                  </p>
+                </div>
+                <ToggleGroup
+                  className="w-full rounded-full border border-white/8 bg-white/[0.03] p-1 sm:w-auto dark:bg-white/[0.025]"
+                  size="sm"
+                  variant="default"
+                  value={[theme]}
+                  onValueChange={(value) => {
+                    const next = value[0];
+                    if (next !== "system" && next !== "light" && next !== "dark") {
+                      return;
+                    }
+                    setTheme(next);
+                  }}
+                >
+                  <Toggle
+                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground/88 shadow-none hover:bg-white/[0.03] hover:text-foreground data-[pressed]:bg-white/[0.08] data-[pressed]:text-foreground dark:hover:bg-white/[0.035] dark:data-[pressed]:bg-white/[0.09]"
+                    value="light"
+                    aria-label="Use the light theme"
+                  >
+                    <SunIcon className="size-3.5" />
+                    Light
+                  </Toggle>
+                  <Toggle
+                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground/88 shadow-none hover:bg-white/[0.03] hover:text-foreground data-[pressed]:bg-white/[0.08] data-[pressed]:text-foreground dark:hover:bg-white/[0.035] dark:data-[pressed]:bg-white/[0.09]"
+                    value="dark"
+                    aria-label="Use the dark theme"
+                  >
+                    <MoonIcon className="size-3.5" />
+                    Dark
+                  </Toggle>
+                  <Toggle
+                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground/88 shadow-none hover:bg-white/[0.03] hover:text-foreground data-[pressed]:bg-white/[0.08] data-[pressed]:text-foreground dark:hover:bg-white/[0.035] dark:data-[pressed]:bg-white/[0.09]"
+                    value="system"
+                    aria-label="Match the system theme"
+                  >
+                    <DesktopIcon className="size-3.5" />
+                    System
+                  </Toggle>
+                </ToggleGroup>
+              </div>
 
-          <SettingsRow
-            title="UI font"
-            description="Set a custom font for the interface. Leave empty for the default system font."
-            resetAction={
-              settings.uiFontFamily !== defaults.uiFontFamily ? (
-                <SettingResetButton
-                  label="UI font"
-                  onClick={() => updateSettings({ uiFontFamily: defaults.uiFontFamily })}
-                />
-              ) : null
-            }
-            control={
-              <Input
-                className="w-full text-right sm:w-48"
-                value={settings.uiFontFamily}
-                onChange={(event) => updateSettings({ uiFontFamily: event.target.value })}
-                placeholder="-apple-system, BlinkM…"
-                spellCheck={false}
-                aria-label="Custom UI font family"
-              />
-            }
-          />
+              <div className="rounded-lg border border-border/50 bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                {theme === "system"
+                  ? `System is currently resolving to ${resolvedTheme}.`
+                  : `You are editing the ${theme} theme.`}
+              </div>
+            </div>
+          </div>
 
-          <SettingsRow
-            title="Code font"
-            description="Set a custom font for code blocks and inline code in chat. Leave empty for the default coding font."
-            resetAction={
-              settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? (
-                <SettingResetButton
-                  label="code font"
-                  onClick={() =>
-                    updateSettings({ chatCodeFontFamily: defaults.chatCodeFontFamily })
-                  }
-                />
-              ) : null
+          <ThemeAppearanceEditor
+            config={resolveThemeAppearanceConfig({
+              importedConfig:
+                activeThemeAppearanceMode === "light"
+                  ? settings.lightImportedThemeAppearance
+                  : settings.darkImportedThemeAppearance,
+              mode: activeThemeAppearanceMode,
+              selection:
+                activeThemeAppearanceMode === "light"
+                  ? settings.lightThemeAppearance
+                  : settings.darkThemeAppearance,
+            })}
+            contextHint={
+              theme === "system"
+                ? `System is currently using the ${activeThemeAppearanceMode} theme. Import or choose a preset for this mode.`
+                : `Choose a preset or import a ${activeThemeAppearanceMode} Codex theme JSON.`
             }
-            control={
-              <Input
-                className="w-full text-right sm:w-48"
-                value={settings.chatCodeFontFamily}
-                onChange={(event) => updateSettings({ chatCodeFontFamily: event.target.value })}
-                placeholder={'"JetBrains Mono"'}
-                spellCheck={false}
-                aria-label="Custom chat code font family"
-              />
+            importedAvailable={
+              activeThemeAppearanceMode === "light"
+                ? settings.lightImportedThemeAppearance != null
+                : settings.darkImportedThemeAppearance != null
+            }
+            mode={activeThemeAppearanceMode}
+            onConfigChange={(config) =>
+              handleThemeAppearanceConfigChange(activeThemeAppearanceMode, config)
+            }
+            onImportTheme={handleImportThemeAppearance}
+            onReset={() =>
+              updateSettings(
+                activeThemeAppearanceMode === "light"
+                  ? { lightThemeAppearance: DEFAULT_THEME_APPEARANCE_SELECTION_ID }
+                  : { darkThemeAppearance: DEFAULT_THEME_APPEARANCE_SELECTION_ID },
+              )
+            }
+            onSelectionChange={(value) =>
+              updateSettings(patchThemeAppearanceSelection(activeThemeAppearanceMode, value))
+            }
+            selection={
+              activeThemeAppearanceMode === "light"
+                ? settings.lightThemeAppearance
+                : settings.darkThemeAppearance
             }
           />
 
