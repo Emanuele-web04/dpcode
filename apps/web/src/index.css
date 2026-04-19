@@ -140,6 +140,7 @@
   --destructive: var(--color-red-500);
   --border: --alpha(var(--color-black) / 5%);
   --input: --alpha(var(--color-black) / 6%);
+  --link: #2563eb;
   --ring: var(--color-neutral-400);
   --destructive-foreground: var(--color-red-700);
   --info: var(--color-blue-500);
@@ -169,6 +170,7 @@
     --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --border: --alpha(var(--color-white) / 4%);
     --input: --alpha(var(--color-white) / 5%);
+    --link: #3b82f6;
     --ring: var(--color-neutral-500);
     --destructive-foreground: var(--color-red-400);
     --info: var(--color-blue-500);
@@ -422,12 +424,12 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown a {
-  color: var(--info-foreground);
+  color: var(--link);
   text-decoration: none;
 }
 
 .chat-markdown a:hover {
-  opacity: 0.8;
+  opacity: 0.86;
 }
 
 .chat-markdown blockquote {

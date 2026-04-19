@@ -136,20 +136,20 @@ const THEME_APPEARANCE_PRESETS = {
         surface: "#f8fafc",
       },
       dark: {
-        accent: "#2563eb",
-        contrast: 54,
+        accent: "#0169cc",
+        contrast: 46,
         fonts: {
-          code: "",
-          ui: "",
+          code: '"Jetbrains Mono"',
+          ui: "Inter",
         },
-        ink: "#e5e7eb",
+        ink: "#fcfcfc",
         opaqueWindows: false,
         semanticColors: {
-          diffAdded: "#16a34a",
-          diffRemoved: "#dc2626",
-          skill: "#2563eb",
+          diffAdded: "#00a240",
+          diffRemoved: "#e02e2a",
+          skill: "#b06dff",
         },
-        surface: "#111827",
+        surface: "#111111",
       },
     },
   },
@@ -495,10 +495,10 @@ export function buildThemeAppearanceCssVariables(
     mode === "dark"
       ? mixHexColors(card, config.ink, 0.06 + contrastFactor * 0.05)
       : mixHexColors(card, config.ink, 0.04 + contrastFactor * 0.05);
-  const accentSurface =
+  const neutralAccentSurface =
     mode === "dark"
-      ? mixHexColors(card, config.accent, 0.14 + contrastFactor * 0.08)
-      : mixHexColors(card, config.accent, 0.1 + contrastFactor * 0.08);
+      ? mixHexColors(card, WHITE, 0.08 + contrastFactor * 0.04)
+      : mixHexColors(card, BLACK, 0.035 + contrastFactor * 0.025);
   const border =
     mode === "dark"
       ? mixHexColors(card, config.ink, 0.1 + contrastFactor * 0.08)
@@ -527,7 +527,7 @@ export function buildThemeAppearanceCssVariables(
     : mixHexColors(card, background, 0.04);
 
   return {
-    "--accent": accentSurface,
+    "--accent": neutralAccentSurface,
     "--accent-foreground": config.ink,
     "--background": background,
     "--border": border,
@@ -540,6 +540,7 @@ export function buildThemeAppearanceCssVariables(
     "--info": config.semanticColors.skill,
     "--info-foreground": config.semanticColors.skill,
     "--input": input,
+    "--link": config.accent,
     "--muted": muted,
     "--muted-foreground": mutedForeground,
     "--popover": popover,
@@ -550,7 +551,7 @@ export function buildThemeAppearanceCssVariables(
     "--secondary": secondary,
     "--secondary-foreground": config.ink,
     "--sidebar": rgbToHslString(sidebarSurface),
-    "--sidebar-accent": rgbToHslString(accentSurface),
+    "--sidebar-accent": rgbToHslString(neutralAccentSurface),
     "--sidebar-accent-foreground": rgbToHslString(config.ink),
     "--sidebar-border": rgbToHslString(border),
     "--sidebar-foreground": rgbToHslString(config.ink),
@@ -576,6 +577,7 @@ export const THEME_APPEARANCE_CSS_VARIABLE_KEYS = [
   "--info",
   "--info-foreground",
   "--input",
+  "--link",
   "--muted",
   "--muted-foreground",
   "--popover",

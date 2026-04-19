@@ -71,8 +71,30 @@ describe("buildThemeAppearanceCssVariables", () => {
     const cssVariables = buildThemeAppearanceCssVariables(dracula!, "dark");
 
     expect(cssVariables["--background"]).toMatch(/^#[\da-f]{6}$/);
+    expect(cssVariables["--link"]).toBe("#ff79c6");
     expect(cssVariables["--primary"]).toBe("#ff79c6");
+    expect(cssVariables["--accent"]).not.toBe(cssVariables["--primary"]);
+    expect(cssVariables["--sidebar-accent"]).not.toBe(cssVariables["--sidebar-primary"]);
     expect(cssVariables["--sidebar-border"]).toMatch(/^\d+ /);
+  });
+
+  it("keeps the codex dark preset aligned with the expected defaults", () => {
+    expect(getThemeAppearancePresetConfig("codex", "dark")).toEqual({
+      accent: "#0169cc",
+      contrast: 46,
+      fonts: {
+        code: '"Jetbrains Mono"',
+        ui: "Inter",
+      },
+      ink: "#fcfcfc",
+      opaqueWindows: false,
+      semanticColors: {
+        diffAdded: "#00a240",
+        diffRemoved: "#e02e2a",
+        skill: "#b06dff",
+      },
+      surface: "#111111",
+    });
   });
 });
 

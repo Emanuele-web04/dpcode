@@ -330,12 +330,10 @@ function getThemeAppearanceBadgeText(label: string): string {
 
 function ThemeAppearanceSelectOption({
   accent,
-  ink,
   label,
   surface,
 }: {
   accent: string;
-  ink: string;
   label: string;
   surface: string;
 }) {
@@ -506,7 +504,6 @@ function ThemeAppearanceEditor({
                   {selectedOption ? (
                     <ThemeAppearanceSelectOption
                       accent={selectedOption.accent}
-                      ink={selectedOption.ink}
                       label={selectedOption.label}
                       surface={selectedOption.surface}
                     />
@@ -525,7 +522,6 @@ function ThemeAppearanceEditor({
                   >
                     <ThemeAppearanceSelectOption
                       accent={option.accent}
-                      ink={option.ink}
                       label={option.label}
                       surface={option.surface}
                     />
@@ -650,7 +646,7 @@ function ThemeAppearanceEditor({
           </DialogHeader>
           <Textarea
             aria-label={`Import ${title}`}
-            className="mx-2 w-auto"
+            className="mx-2 w-auto placeholder:text-muted-foreground/22"
             placeholder={`codex-theme-v1:{"codeThemeId":"catppuccin","theme":{"accent":"#cba6f7","contrast":50,"fonts":{"code":"\\"Geist Mono\\", ui-monospace, \\"SFMono-Regular\\"","ui":"Inter"},"ink":"#cdd6f4","opaqueWindows":false,"semanticColors":{"diffAdded":"#a6e3a1","diffRemoved":"#f38ba8","skill":"#cba6f7"},"surface":"#1e1e2e"},"variant":"${
               mode === "light" ? "light" : "dark"
             }"}`}
@@ -715,13 +711,17 @@ function SettingsRouteView() {
   const handleImportThemeAppearance = useCallback(
     (parsed: ParsedThemeAppearanceImport) => {
       updateSettings({
-        ...patchImportedThemeAppearance(parsed.mode, parsed.config),
+        ...patchImportedThemeAppearance(parsed.mode, {
+          ...parsed.config,
+          fonts: {
+            code: settings.chatCodeFontFamily,
+            ui: settings.uiFontFamily,
+          },
+        }),
         ...patchThemeAppearanceSelection(parsed.mode, "imported"),
-        ...(parsed.config.fonts.ui ? { uiFontFamily: parsed.config.fonts.ui } : {}),
-        ...(parsed.config.fonts.code ? { chatCodeFontFamily: parsed.config.fonts.code } : {}),
       });
     },
-    [updateSettings],
+    [settings.chatCodeFontFamily, settings.uiFontFamily, updateSettings],
   );
   const handleThemeAppearanceConfigChange = useCallback(
     (
@@ -1535,7 +1535,7 @@ function SettingsRouteView() {
                   </p>
                 </div>
                 <ToggleGroup
-                  className="w-full rounded-full border border-border/60 bg-background/70 p-1 sm:w-auto"
+                  className="w-full rounded-full border border-white/8 bg-white/[0.03] p-1 sm:w-auto dark:bg-white/[0.025]"
                   size="sm"
                   variant="default"
                   value={[theme]}
@@ -1548,7 +1548,7 @@ function SettingsRouteView() {
                   }}
                 >
                   <Toggle
-                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground shadow-none hover:bg-foreground/6 hover:text-foreground data-[pressed]:bg-input data-[pressed]:text-foreground"
+                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground/88 shadow-none hover:bg-white/[0.03] hover:text-foreground data-[pressed]:bg-white/[0.08] data-[pressed]:text-foreground dark:hover:bg-white/[0.035] dark:data-[pressed]:bg-white/[0.09]"
                     value="light"
                     aria-label="Use the light theme"
                   >
@@ -1556,7 +1556,7 @@ function SettingsRouteView() {
                     Light
                   </Toggle>
                   <Toggle
-                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground shadow-none hover:bg-foreground/6 hover:text-foreground data-[pressed]:bg-input data-[pressed]:text-foreground"
+                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground/88 shadow-none hover:bg-white/[0.03] hover:text-foreground data-[pressed]:bg-white/[0.08] data-[pressed]:text-foreground dark:hover:bg-white/[0.035] dark:data-[pressed]:bg-white/[0.09]"
                     value="dark"
                     aria-label="Use the dark theme"
                   >
@@ -1564,7 +1564,7 @@ function SettingsRouteView() {
                     Dark
                   </Toggle>
                   <Toggle
-                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground shadow-none hover:bg-foreground/6 hover:text-foreground data-[pressed]:bg-input data-[pressed]:text-foreground"
+                    className="rounded-full border-transparent px-3.5 text-[12px] font-normal text-muted-foreground/88 shadow-none hover:bg-white/[0.03] hover:text-foreground data-[pressed]:bg-white/[0.08] data-[pressed]:text-foreground dark:hover:bg-white/[0.035] dark:data-[pressed]:bg-white/[0.09]"
                     value="system"
                     aria-label="Match the system theme"
                   >
