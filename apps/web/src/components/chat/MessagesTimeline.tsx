@@ -184,6 +184,7 @@ interface MessagesTimelineProps {
   activeTurnStartedAt: string | null;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
+  changedFilesExpandedByTurnId?: Record<string, boolean>;
   scrollContainer: HTMLDivElement | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
@@ -191,6 +192,7 @@ interface MessagesTimelineProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
   expandedWorkGroups: Record<string, boolean>;
+  onSetChangedFilesExpanded?: (turnId: TurnId, expanded: boolean) => void;
   onToggleWorkGroup: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
@@ -211,6 +213,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
+  changedFilesExpandedByTurnId = {},
   followLiveOutput = false,
   scrollContainer,
   timelineEntries,
@@ -219,6 +222,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   turnDiffSummaryByAssistantMessageId,
   nowIso,
   expandedWorkGroups,
+  onSetChangedFilesExpanded,
   onToggleWorkGroup,
   onOpenTurnDiff,
   onOpenThread,
@@ -245,9 +249,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
-  const [expandedFileChangesByMessageId, setExpandedFileChangesByMessageId] = useState<
-    Record<string, boolean>
-  >({});
   const [expandedUserMessagesById, setExpandedUserMessagesById] = useState<Record<string, boolean>>(
     {},
   );
@@ -498,7 +499,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     scheduleVirtualizerMeasure();
   }, [
     expandedWorkGroups,
-    expandedFileChangesByMessageId,
+    changedFilesExpandedByTurnId,
     allDirectoriesExpandedByTurnId,
     normalizedChatFontSizePx,
     scheduleVirtualizerMeasure,
@@ -531,12 +532,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const virtualRows = shouldUseSimpleList ? [] : rowVirtualizer.getVirtualItems();
   const nonVirtualizedRows = shouldUseSimpleList ? rows : rows.slice(virtualizedRowCount);
-  const toggleFileChangesExpanded = useCallback((messageId: MessageId) => {
-    setExpandedFileChangesByMessageId((current) => ({
-      ...current,
-      [messageId]: !(current[messageId] ?? true),
-    }));
-  }, []);
+  const toggleFileChangesExpanded = useCallback(
+    (turnId: TurnId) => {
+      const currentExpanded = changedFilesExpandedByTurnId[turnId] ?? true;
+      onSetChangedFilesExpanded?.(turnId, !currentExpanded);
+    },
+    [changedFilesExpandedByTurnId, onSetChangedFilesExpanded],
+  );
 
   const renderRowContent = (row: MessagesTimelineRow) => (
     <div
@@ -924,7 +926,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
                   const fileChangesExpanded =
-                    expandedFileChangesByMessageId[row.message.id] ?? true;
+                    changedFilesExpandedByTurnId[turnSummary.turnId] ?? true;
                   const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
                     row.message.id,
                   );
@@ -952,7 +954,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 ? "Collapse changed files list"
                                 : "Expand changed files list"
                             }
-                            onClick={() => toggleFileChangesExpanded(row.message.id)}
+                            onClick={() => toggleFileChangesExpanded(turnSummary.turnId)}
                           >
                             <DisclosureChevron
                               open={fileChangesExpanded}

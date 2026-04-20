@@ -53,6 +53,7 @@ export interface AppState {
   proposedPlanByThreadId?: Record<ThreadId, Record<string, Thread["proposedPlans"][number]>>;
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
+  threadChangedFilesExpandedByTurnId?: Record<ThreadId, Record<TurnId, boolean>>;
 }
 
 type ReadModelProject = OrchestrationReadModel["projects"][number];
@@ -93,6 +94,8 @@ const EMPTY_TURN_DIFF_BY_THREAD: Record<
   ThreadId,
   Record<TurnId, Thread["turnDiffSummaries"][number]>
 > = {};
+const EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID: Record<ThreadId, Record<TurnId, boolean>> = {};
+const EMPTY_CHANGED_FILES_EXPANDED_BY_TURN: Record<TurnId, boolean> = {};
 
 const initialState: AppState = {
   projects: [],
@@ -111,6 +114,7 @@ const initialState: AppState = {
   proposedPlanByThreadId: {},
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
+  threadChangedFilesExpandedByTurnId: {},
 };
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
@@ -164,6 +168,7 @@ function readPersistedState(): AppState {
       expandedProjectCwds?: string[];
       projectOrderCwds?: string[];
       projectNamesByCwd?: Record<string, string>;
+      threadChangedFilesExpandedByTurnId?: Record<string, Record<string, boolean>>;
     };
     persistedExpandedProjectCwds.clear();
     persistedProjectOrderCwds.length = 0;
@@ -186,7 +191,12 @@ function readPersistedState(): AppState {
       if (trimmedName.length === 0) continue;
       persistedProjectNamesByCwd.set(projectCwdKey(cwd), trimmedName);
     }
-    return { ...initialState };
+    return {
+      ...initialState,
+      threadChangedFilesExpandedByTurnId: sanitizeThreadChangedFilesExpandedByTurnId(
+        parsed.threadChangedFilesExpandedByTurnId,
+      ),
+    };
   } catch {
     return initialState;
   }
@@ -207,6 +217,7 @@ function persistState(state: AppState): void {
           .map((project) => project.cwd),
         projectOrderCwds: state.projects.map((project) => project.cwd),
         projectNamesByCwd: Object.fromEntries(persistedProjectNamesByCwd),
+        threadChangedFilesExpandedByTurnId: state.threadChangedFilesExpandedByTurnId ?? {},
       }),
     );
     if (!legacyKeysCleanedUp) {
@@ -1785,6 +1796,35 @@ function retainThreadScopedRecord<T>(
   return changed ? nextRecord : record;
 }
 
+function sanitizeThreadChangedFilesExpandedByTurnId(
+  input: unknown,
+): Record<ThreadId, Record<TurnId, boolean>> {
+  if (!input || typeof input !== "object") {
+    return {};
+  }
+
+  const nextRecord: Record<ThreadId, Record<TurnId, boolean>> = {};
+  for (const [threadId, value] of Object.entries(input)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    const nextTurns: Record<TurnId, boolean> = {};
+    for (const [turnId, expanded] of Object.entries(value)) {
+      if (turnId.length === 0 || expanded !== false) {
+        continue;
+      }
+      nextTurns[turnId as TurnId] = false;
+    }
+
+    if (Object.keys(nextTurns).length > 0) {
+      nextRecord[threadId as ThreadId] = nextTurns;
+    }
+  }
+
+  return nextRecord;
+}
+
 function writeThreadShellProjection(
   state: AppState,
   nextThread: {
@@ -1963,6 +2003,8 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
     state.turnDiffIdsByThreadId ?? EMPTY_TURN_DIFF_IDS_BY_THREAD;
   const { [threadId]: _removedDiffs, ...turnDiffSummaryByThreadId } =
     state.turnDiffSummaryByThreadId ?? EMPTY_TURN_DIFF_BY_THREAD;
+  const { [threadId]: _removedChangedFilesExpanded, ...threadChangedFilesExpandedByTurnId } =
+    state.threadChangedFilesExpandedByTurnId ?? EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID;
   const { [threadId]: _removedSummary, ...sidebarThreadSummaryById } =
     state.sidebarThreadSummaryById;
   const nextThreadIds = (state.threadIds ?? EMPTY_THREAD_IDS).filter((id) => id !== threadId);
@@ -1990,6 +2032,7 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
     proposedPlanByThreadId,
     turnDiffIdsByThreadId,
     turnDiffSummaryByThreadId,
+    threadChangedFilesExpandedByTurnId,
     sidebarThreadSummaryById,
     threads: nextThreads,
   };
@@ -3155,6 +3198,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       state.turnDiffSummaryByThreadId,
       nextThreadIds,
     ),
+    threadChangedFilesExpandedByTurnId: retainThreadScopedRecord(
+      state.threadChangedFilesExpandedByTurnId,
+      nextThreadIds,
+    ),
   };
   for (const thread of nextThreads) {
     normalizedState = writeThreadState(normalizedState, thread);
@@ -3191,6 +3238,8 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     normalizedState.proposedPlanByThreadId === state.proposedPlanByThreadId &&
     normalizedState.turnDiffIdsByThreadId === state.turnDiffIdsByThreadId &&
     normalizedState.turnDiffSummaryByThreadId === state.turnDiffSummaryByThreadId &&
+    normalizedState.threadChangedFilesExpandedByTurnId ===
+      state.threadChangedFilesExpandedByTurnId &&
     state.threadsHydrated
   ) {
     return state;
@@ -3378,6 +3427,51 @@ export function setThreadWorkspace(
   });
 }
 
+export function setThreadChangedFilesExpanded(
+  state: AppState,
+  threadId: ThreadId,
+  turnId: TurnId,
+  expanded: boolean,
+): AppState {
+  const currentByThread =
+    state.threadChangedFilesExpandedByTurnId ?? EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID;
+  const currentByTurn = currentByThread[threadId] ?? EMPTY_CHANGED_FILES_EXPANDED_BY_TURN;
+  const currentExpanded = currentByTurn[turnId] ?? true;
+  if (currentExpanded === expanded) {
+    return state;
+  }
+
+  if (expanded) {
+    const { [turnId]: _removedTurnId, ...remainingTurns } = currentByTurn;
+    if (Object.keys(remainingTurns).length === 0) {
+      const { [threadId]: _removedThreadId, ...remainingThreads } = currentByThread;
+      return {
+        ...state,
+        threadChangedFilesExpandedByTurnId: remainingThreads,
+      };
+    }
+
+    return {
+      ...state,
+      threadChangedFilesExpandedByTurnId: {
+        ...currentByThread,
+        [threadId]: remainingTurns,
+      },
+    };
+  }
+
+  return {
+    ...state,
+    threadChangedFilesExpandedByTurnId: {
+      ...currentByThread,
+      [threadId]: {
+        ...currentByTurn,
+        [turnId]: false,
+      },
+    },
+  };
+}
+
 // ── Zustand store ────────────────────────────────────────────────────
 
 interface AppStore extends AppState {
@@ -3398,6 +3492,7 @@ interface AppStore extends AppState {
   renameProjectLocally: (projectId: Project["id"], name: string | null) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
+  setThreadChangedFilesExpanded: (threadId: ThreadId, turnId: TurnId, expanded: boolean) => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -3429,6 +3524,8 @@ export const useStore = create<AppStore>((set) => ({
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadWorkspace: (threadId, patch) =>
     set((state) => setThreadWorkspace(state, threadId, patch)),
+  setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
+    set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
 }));
 
 // Persist state changes with debouncing to avoid localStorage thrashing

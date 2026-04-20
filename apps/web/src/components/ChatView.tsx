@@ -338,6 +338,7 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
+const EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID: Record<string, boolean> = {};
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -659,6 +660,9 @@ export default function ChatView({
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
+  const setStoreThreadChangedFilesExpanded = useStore(
+    (store) => store.setThreadChangedFilesExpanded,
+  );
   const { settings } = useAppSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
@@ -761,6 +765,14 @@ export default function ChatView({
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
+  );
+  const changedFilesExpandedByTurnId = useStore(
+    useMemo(
+      () => (store) =>
+        store.threadChangedFilesExpandedByTurnId?.[threadId] ??
+        EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID,
+      [threadId],
+    ),
   );
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -6149,6 +6161,12 @@ export default function ChatView({
       [groupId]: !existing[groupId],
     }));
   }, []);
+  const onSetChangedFilesExpanded = useCallback(
+    (turnId: TurnId, expanded: boolean) => {
+      setStoreThreadChangedFilesExpanded(threadId, turnId, expanded);
+    },
+    [setStoreThreadChangedFilesExpanded, threadId],
+  );
   const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
     setExpandedImage(preview);
   }, []);
@@ -7032,7 +7050,9 @@ export default function ChatView({
                 completionDividerBeforeEntryId={completionDividerBeforeEntryId}
                 completionSummary={completionSummary}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                changedFilesExpandedByTurnId={changedFilesExpandedByTurnId}
                 expandedWorkGroups={expandedWorkGroups}
+                onSetChangedFilesExpanded={onSetChangedFilesExpanded}
                 onToggleWorkGroup={onToggleWorkGroup}
                 onOpenTurnDiff={onOpenTurnDiff}
                 onOpenThread={onNavigateToThread}

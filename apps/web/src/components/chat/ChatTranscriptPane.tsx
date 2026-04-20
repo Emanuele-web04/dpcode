@@ -20,11 +20,15 @@ import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline } from "./MessagesTimeline";
 
+const EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID: Record<string, boolean> = {};
+const NOOP_SET_CHANGED_FILES_EXPANDED = () => {};
+
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   chatFontSizePx: number;
+  changedFilesExpandedByTurnId?: Record<string, boolean>;
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
   emptyStateProjectName: string | undefined;
@@ -50,6 +54,7 @@ interface ChatTranscriptPaneProps {
   onOpenThread: (threadId: ThreadId) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
   onScrollToBottom: () => void;
+  onSetChangedFilesExpanded?: (turnId: TurnId, expanded: boolean) => void;
   onLiveContentHeightChange: () => void;
   onToggleWorkGroup: (groupId: string) => void;
   resolvedTheme: "light" | "dark";
@@ -69,6 +74,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   activeTurnInProgress,
   activeTurnStartedAt,
   chatFontSizePx,
+  changedFilesExpandedByTurnId = EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID,
   completionDividerBeforeEntryId,
   completionSummary,
   emptyStateProjectName,
@@ -94,6 +100,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onOpenThread,
   onRevertUserMessage,
   onScrollToBottom,
+  onSetChangedFilesExpanded = NOOP_SET_CHANGED_FILES_EXPANDED,
   onLiveContentHeightChange,
   onToggleWorkGroup,
   resolvedTheme,
@@ -142,7 +149,9 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             completionDividerBeforeEntryId={completionDividerBeforeEntryId}
             completionSummary={completionSummary}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            changedFilesExpandedByTurnId={changedFilesExpandedByTurnId}
             expandedWorkGroups={expandedWorkGroups}
+            onSetChangedFilesExpanded={onSetChangedFilesExpanded}
             onToggleWorkGroup={onToggleWorkGroup}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
