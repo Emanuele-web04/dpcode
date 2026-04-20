@@ -1369,6 +1369,74 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("+2");
   });
 
+  it("renders changed-files cards from controlled thread-scoped expansion state", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const assistantMessageId = MessageId.makeUnsafe("message-assistant-collapsed-files");
+    const turnId = TurnId.makeUnsafe("turn-collapsed-files");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        changedFilesExpandedByTurnId={{ [turnId]: false }}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-assistant-collapsed-files",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={
+          new Map([
+            [
+              assistantMessageId,
+              {
+                turnId,
+                completedAt: "2026-03-17T19:12:30.000Z",
+                assistantMessageId,
+                files: [
+                  {
+                    path: "apps/web/src/components/chat/MessagesTimeline.tsx",
+                    additions: 2,
+                    deletions: 0,
+                  },
+                ],
+              },
+            ],
+          ])
+        }
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Expand changed files list");
+    expect(markup).toContain("grid-rows-[0fr] opacity-0");
+  });
+
   it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-summary-fallback");

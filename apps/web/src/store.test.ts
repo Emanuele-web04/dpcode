@@ -22,6 +22,7 @@ import {
   renameProjectLocally,
   reorderProjects,
   setThreadWorkspace,
+  setThreadChangedFilesExpanded,
   setAllProjectsExpanded,
   syncServerReadModel,
   syncServerThreadDetailHotPath,
@@ -1805,6 +1806,97 @@ describe("store read model sync", () => {
       expect(JSON.parse(storage.get("t3code:renderer-state:v8") ?? "{}")).toMatchObject({
         projectNamesByCwd: {
           "/tmp/project": "dpcode",
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stores only collapsed changed-files overrides and clears them when re-expanded", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const collapsed = setThreadChangedFilesExpanded(
+      makeState(makeThread()),
+      threadId,
+      turnId,
+      false,
+    );
+
+    expect(collapsed.threadChangedFilesExpandedByTurnId).toEqual({
+      [threadId]: {
+        [turnId]: false,
+      },
+    });
+
+    const expanded = setThreadChangedFilesExpanded(collapsed, threadId, turnId, true);
+
+    expect(expanded.threadChangedFilesExpandedByTurnId).toEqual({});
+  });
+
+  it("prunes persisted changed-files overrides when a thread disappears from the read model", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const otherThreadId = ThreadId.makeUnsafe("thread-2");
+    const otherTurnId = TurnId.makeUnsafe("turn-2");
+    const initialState = {
+      ...makeState(makeThread({ id: threadId })),
+      threads: [makeThread({ id: threadId }), makeThread({ id: otherThreadId })],
+      threadChangedFilesExpandedByTurnId: {
+        [threadId]: { [turnId]: false },
+        [otherThreadId]: { [otherTurnId]: false },
+      },
+    } satisfies AppState;
+
+    const next = syncServerReadModel(
+      initialState,
+      makeReadModel(makeReadModelThread({ id: threadId, updatedAt: "2026-02-28T00:00:00.000Z" })),
+    );
+
+    expect(next.threadChangedFilesExpandedByTurnId).toEqual({
+      [threadId]: { [turnId]: false },
+    });
+  });
+
+  it("hydrates persisted changed-files overrides and ignores non-collapsed values", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        clear: () => {
+          storage.clear();
+        },
+      },
+      addEventListener: vi.fn(),
+    };
+    storage.set(
+      "t3code:renderer-state:v8",
+      JSON.stringify({
+        threadChangedFilesExpandedByTurnId: {
+          "thread-1": {
+            "turn-collapsed": false,
+            "turn-expanded": true,
+          },
+          "thread-empty": {},
+        },
+      }),
+    );
+
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const freshStore = await import("./store");
+
+      expect(freshStore.useStore.getState().threadChangedFilesExpandedByTurnId).toEqual({
+        [ThreadId.makeUnsafe("thread-1")]: {
+          [TurnId.makeUnsafe("turn-collapsed")]: false,
         },
       });
     } finally {
