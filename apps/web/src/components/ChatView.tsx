@@ -99,7 +99,11 @@ import {
   replaceTextRange,
   stripComposerTriggerText,
 } from "../composer-logic";
-import { createProjectSelector, createThreadSelector } from "../storeSelectors";
+import {
+  createAllThreadsSelector,
+  createProjectSelector,
+  createThreadSelector,
+} from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
@@ -154,6 +158,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItems";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
+import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
@@ -259,6 +264,7 @@ import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
+import { ComposerUsageBadge } from "./chat/ComposerUsageBadge";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
@@ -942,6 +948,7 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const allThreads = useStore(useMemo(() => createAllThreadsSelector(), []));
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -5431,6 +5438,12 @@ export default function ChatView({
     shortcutLabel: traitsPickerShortcutLabel,
     onPromptChange: setPromptFromTraits,
   });
+  const showComposerUsageBadge = settings.showComposerUsageBadge;
+  const composerUsageSummary = useProviderUsageSummary({
+    provider: showComposerUsageBadge ? selectedProvider : null,
+    threads: allThreads,
+    codexHomePath: settings.codexHomePath || null,
+  });
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
       scheduleComposerFocus();
@@ -6461,13 +6474,27 @@ export default function ChatView({
                         onProviderModelChange={onProviderModelSelect}
                       />
 
-                      {providerTraitsPicker ? (
+                      {providerTraitsPicker || showComposerUsageBadge ? (
                         <>
                           <Separator
                             orientation="vertical"
                             className="mx-0.5 hidden h-4 sm:block"
                           />
                           {providerTraitsPicker}
+                          {providerTraitsPicker && showComposerUsageBadge ? (
+                            <Separator
+                              orientation="vertical"
+                              className="mx-0.5 hidden h-4 sm:block"
+                            />
+                          ) : null}
+                          {showComposerUsageBadge ? (
+                            <ComposerUsageBadge
+                              provider={selectedProvider}
+                              rateLimits={composerUsageSummary.rateLimits}
+                              usageLines={composerUsageSummary.usageLines}
+                              isLoading={composerUsageSummary.isLoading}
+                            />
+                          ) : null}
                         </>
                       ) : null}
 
@@ -7178,13 +7205,27 @@ export default function ChatView({
                                     onProviderModelChange={onProviderModelSelect}
                                   />
 
-                                  {providerTraitsPicker ? (
+                                  {providerTraitsPicker || showComposerUsageBadge ? (
                                     <>
                                       <Separator
                                         orientation="vertical"
                                         className="mx-0.5 hidden h-4 sm:block"
                                       />
                                       {providerTraitsPicker}
+                                      {providerTraitsPicker && showComposerUsageBadge ? (
+                                        <Separator
+                                          orientation="vertical"
+                                          className="mx-0.5 hidden h-4 sm:block"
+                                        />
+                                      ) : null}
+                                      {showComposerUsageBadge ? (
+                                        <ComposerUsageBadge
+                                          provider={selectedProvider}
+                                          rateLimits={composerUsageSummary.rateLimits}
+                                          usageLines={composerUsageSummary.usageLines}
+                                          isLoading={composerUsageSummary.isLoading}
+                                        />
+                                      ) : null}
                                     </>
                                   ) : null}
 

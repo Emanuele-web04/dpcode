@@ -290,6 +290,9 @@ export function createWsNativeApi(): NativeApi {
         return window.desktopBridge.pickFolder();
       },
       confirm: async (message) => {
+        if (window.desktopBridge?.confirm) {
+          return window.desktopBridge.confirm(message);
+        }
         return showConfirmDialogFallback(message);
       },
     },
@@ -381,6 +384,8 @@ export function createWsNativeApi(): NativeApi {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
+      getProviderUsageSnapshot: (input) =>
+        transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
@@ -407,6 +412,10 @@ export function createWsNativeApi(): NativeApi {
           command,
         }),
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
+      importLegacyT3State: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.importLegacyT3State, input, {
+          timeoutMs: null,
+        }),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
       getFullThreadDiff: (input) =>

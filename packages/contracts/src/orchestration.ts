@@ -22,6 +22,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
   importThread: "orchestration.importThread",
+  importLegacyT3State: "orchestration.importLegacyT3State",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -628,6 +629,24 @@ export const ThreadHandoffImportedMessage = Schema.Struct({
 });
 export type ThreadHandoffImportedMessage = typeof ThreadHandoffImportedMessage.Type;
 
+export const ImportedThreadMessage = Schema.Struct({
+  messageId: MessageId,
+  role: OrchestrationMessageRole,
+  text: Schema.String,
+  attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  skills: Schema.optional(Schema.Array(ProviderSkillReference)),
+  mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
+  dispatchMode: Schema.optional(TurnDispatchMode),
+  turnId: Schema.optional(Schema.NullOr(TurnId)).pipe(Schema.withDecodingDefault(() => null)),
+  streaming: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  source: Schema.optional(OrchestrationMessageSource).pipe(
+    Schema.withDecodingDefault(() => "native"),
+  ),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ImportedThreadMessage = typeof ImportedThreadMessage.Type;
+
 const ThreadHandoffCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.handoff.create"),
   commandId: CommandId,
@@ -694,6 +713,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
   threadId: ThreadId,
+  projectId: Schema.optional(ProjectId),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   envMode: Schema.optional(ThreadEnvironmentMode),
@@ -896,7 +916,23 @@ const ThreadMessagesImportCommand = Schema.Struct({
   type: Schema.Literal("thread.messages.import"),
   commandId: CommandId,
   threadId: ThreadId,
-  messages: Schema.Array(ThreadHandoffImportedMessage),
+  messages: Schema.Array(ImportedThreadMessage),
+  createdAt: IsoDateTime,
+});
+
+const ThreadProposedPlansImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.proposed-plans.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  proposedPlans: Schema.Array(OrchestrationProposedPlan),
+  createdAt: IsoDateTime,
+});
+
+const ThreadActivitiesImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.activities.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  activities: Schema.Array(OrchestrationThreadActivity),
   createdAt: IsoDateTime,
 });
 
@@ -960,6 +996,8 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessagesImportCommand,
+  ThreadProposedPlansImportCommand,
+  ThreadActivitiesImportCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -998,6 +1036,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.reverted",
   "thread.session-stop-requested",
   "thread.session-set",
+  "thread.messages-imported",
+  "thread.proposed-plans-imported",
+  "thread.activities-imported",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
@@ -1100,6 +1141,7 @@ export const ThreadUnarchivedPayload = Schema.Struct({
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
+  projectId: Schema.optional(ProjectId),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   envMode: Schema.optional(ThreadEnvironmentMode),
@@ -1204,6 +1246,21 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
+});
+
+export const ThreadMessagesImportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messages: Schema.Array(ImportedThreadMessage),
+});
+
+export const ThreadProposedPlansImportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  proposedPlans: Schema.Array(OrchestrationProposedPlan),
+});
+
+export const ThreadActivitiesImportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  activities: Schema.Array(OrchestrationThreadActivity),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
@@ -1348,6 +1405,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-set"),
     payload: ThreadSessionSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.messages-imported"),
+    payload: ThreadMessagesImportedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.proposed-plans-imported"),
+    payload: ThreadProposedPlansImportedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.activities-imported"),
+    payload: ThreadActivitiesImportedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -1507,6 +1579,31 @@ export const OrchestrationImportThreadResult = Schema.Struct({
 });
 export type OrchestrationImportThreadResult = typeof OrchestrationImportThreadResult.Type;
 
+export const OrchestrationImportLegacyT3StateInput = Schema.Struct({
+  sourceBaseDir: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationImportLegacyT3StateInput =
+  typeof OrchestrationImportLegacyT3StateInput.Type;
+
+export const OrchestrationImportLegacyT3StateResult = Schema.Struct({
+  sourceBaseDir: TrimmedNonEmptyString,
+  sourceStateDir: TrimmedNonEmptyString,
+  importedProjects: NonNegativeInt,
+  mappedProjects: NonNegativeInt,
+  skippedProjects: NonNegativeInt,
+  importedThreads: NonNegativeInt,
+  skippedThreads: NonNegativeInt,
+  importedMessages: NonNegativeInt,
+  importedActivities: NonNegativeInt,
+  importedProposedPlans: NonNegativeInt,
+  importedCheckpoints: NonNegativeInt,
+  copiedAttachments: NonNegativeInt,
+  skippedAttachments: NonNegativeInt,
+  missingAttachments: NonNegativeInt,
+});
+export type OrchestrationImportLegacyT3StateResult =
+  typeof OrchestrationImportLegacyT3StateResult.Type;
+
 export const OrchestrationUnsubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -1528,6 +1625,10 @@ export const OrchestrationRpcSchemas = {
   importThread: {
     input: OrchestrationImportThreadInput,
     output: OrchestrationImportThreadResult,
+  },
+  importLegacyT3State: {
+    input: OrchestrationImportLegacyT3StateInput,
+    output: OrchestrationImportLegacyT3StateResult,
   },
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,

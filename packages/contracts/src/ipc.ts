@@ -37,6 +37,8 @@ import type {
 } from "./project";
 import type {
   ServerConfig,
+  ServerGetProviderUsageSnapshotInput,
+  ServerGetProviderUsageSnapshotResult,
   ServerListWorktreesResult,
   ServerRefreshProvidersResult,
   ServerUpsertKeybindingInput,
@@ -60,6 +62,8 @@ import type {
   OrchestrationGetFullThreadDiffResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
+  OrchestrationImportLegacyT3StateInput,
+  OrchestrationImportLegacyT3StateResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
@@ -324,6 +328,9 @@ export interface NativeApi {
     getConfig: () => Promise<ServerConfig>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
+    getProviderUsageSnapshot: (
+      input: ServerGetProviderUsageSnapshotInput,
+    ) => Promise<ServerGetProviderUsageSnapshotResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
@@ -347,6 +354,9 @@ export interface NativeApi {
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
+    importLegacyT3State: (
+      input: OrchestrationImportLegacyT3StateInput,
+    ) => Promise<OrchestrationImportLegacyT3StateResult>;
     repairState: () => Promise<OrchestrationReadModel>;
     getTurnDiff: (input: OrchestrationGetTurnDiffInput) => Promise<OrchestrationGetTurnDiffResult>;
     getFullThreadDiff: (

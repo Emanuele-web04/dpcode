@@ -13,6 +13,7 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import {
   requireProject,
+  requireProjectActive,
   requireProjectAbsent,
   requireProjectHasNoThreads,
   requireProjectWorkspaceRootAvailable,
@@ -543,6 +544,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.projectId !== undefined) {
+        yield* requireProjectActive({
+          readModel,
+          command,
+          projectId: command.projectId,
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -554,6 +562,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.meta-updated",
         payload: {
           threadId: command.threadId,
+          ...(command.projectId !== undefined ? { projectId: command.projectId } : {}),
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
@@ -929,27 +938,61 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      return command.messages.map((message) => ({
+      return {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         }),
-        type: "thread.message-sent" as const,
+        type: "thread.messages-imported" as const,
         payload: {
           threadId: command.threadId,
-          messageId: message.messageId,
-          role: message.role,
-          text: message.text,
-          ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-          turnId: null,
-          streaming: false,
-          source: "native" as const,
-          createdAt: message.createdAt,
-          updatedAt: message.updatedAt,
+          messages: command.messages,
         },
-      }));
+      };
+    }
+
+    case "thread.proposed-plans.import": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.proposed-plans-imported",
+        payload: {
+          threadId: command.threadId,
+          proposedPlans: command.proposedPlans,
+        },
+      };
+    }
+
+    case "thread.activities.import": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.activities-imported",
+        payload: {
+          threadId: command.threadId,
+          activities: command.activities,
+        },
+      };
     }
 
     case "thread.message.assistant.delta": {

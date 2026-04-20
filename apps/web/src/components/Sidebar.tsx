@@ -114,6 +114,7 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { SidebarSearchPalette } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { useLegacyT3Import } from "../hooks/useLegacyT3Import";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -1086,6 +1087,8 @@ export default function Sidebar() {
     select: (config) => config.keybindings,
   });
   const queryClient = useQueryClient();
+  const { defaultLegacyT3BaseDir, importLegacyT3State, isImportingLegacyT3State } =
+    useLegacyT3Import();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const [addingProject, setAddingProject] = useState(false);
@@ -1834,6 +1837,17 @@ export default function Sidebar() {
     setShowManualPathInput(false);
     setAddingProject((prev) => !prev);
   }, []);
+
+  const handleImportLegacyProjects = useCallback(() => {
+    void importLegacyT3State({
+      confirmationLines: [
+        "Import from T3 Code?",
+        `Source: ${defaultLegacyT3BaseDir}`,
+        "This imports legacy projects and chats into the current DP Code profile.",
+        "Existing DP Code chats stay in place and duplicate thread ids are skipped.",
+      ],
+    });
+  }, [defaultLegacyT3BaseDir, importLegacyT3State]);
 
   // Send the shortcut straight to the native picker when desktop APIs are available.
   const handleShortcutAddProject = useCallback(() => {
@@ -5482,8 +5496,31 @@ export default function Sidebar() {
                 )}
 
                 {standardProjects.length === 0 && !shouldShowProjectPathEntry && (
-                  <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                    No projects yet
+                  <div className="px-2 pt-4">
+                    <div className="rounded-xl border border-border/70 bg-secondary/20 px-3 py-3 text-center">
+                      <p className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                        No projects yet
+                      </p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/52">
+                        Add a folder manually or import your existing T3 Code projects and chats.
+                      </p>
+                      <div className="mt-3 flex flex-col gap-2">
+                        <Button size="sm" onClick={handleStartAddProject}>
+                          Add project
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={isImportingLegacyT3State}
+                          onClick={handleImportLegacyProjects}
+                        >
+                          {isImportingLegacyT3State ? "Importing..." : "Import from T3 Code"}
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/45">
+                        Source: {defaultLegacyT3BaseDir}
+                      </p>
+                    </div>
                   </div>
                 )}
               </SidebarGroup>

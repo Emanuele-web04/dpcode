@@ -61,6 +61,18 @@ type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][nu
 type ShellSnapshotProject = OrchestrationShellSnapshot["projects"][number];
 type ShellSnapshotThread = OrchestrationShellSnapshot["threads"][number];
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+type ThreadMessagesImportedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.messages-imported" }
+>;
+type ThreadActivitiesImportedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.activities-imported" }
+>;
+type ThreadProposedPlansImportedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.proposed-plans-imported" }
+>;
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -2542,6 +2554,106 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
   };
 }
 
+function applyThreadMessagesImportedEvent(
+  thread: Thread,
+  event: ThreadMessagesImportedEvent,
+): Thread {
+  return event.payload.messages.reduce<Thread>(
+    (nextThread, message) =>
+      applyThreadMessageSentEvent(nextThread, {
+        ...event,
+        type: "thread.message-sent",
+        payload: {
+          threadId: event.payload.threadId,
+          messageId: message.messageId,
+          role: message.role,
+          text: message.text,
+          ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+          ...(message.skills !== undefined ? { skills: message.skills } : {}),
+          ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+          ...(message.dispatchMode !== undefined ? { dispatchMode: message.dispatchMode } : {}),
+          turnId: message.turnId ?? null,
+          streaming: message.streaming ?? false,
+          source: message.source ?? "native",
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        },
+      }),
+    thread,
+  );
+}
+
+function applyThreadActivitiesImportedEvent(
+  thread: Thread,
+  event: ThreadActivitiesImportedEvent,
+): Thread {
+  let nextActivities = thread.activities;
+  let nextUpdatedAt = thread.updatedAt;
+  let changed = false;
+  for (const activity of event.payload.activities) {
+    const normalizedActivities = normalizeActivities([...nextActivities, activity], nextActivities);
+    const normalizedUpdatedAt =
+      (nextUpdatedAt ?? thread.createdAt) > activity.createdAt ? nextUpdatedAt : activity.createdAt;
+    if (normalizedActivities !== nextActivities) {
+      nextActivities = normalizedActivities;
+      changed = true;
+    }
+    if (normalizedUpdatedAt !== nextUpdatedAt) {
+      nextUpdatedAt = normalizedUpdatedAt;
+      changed = true;
+    }
+  }
+  return changed
+    ? {
+        ...thread,
+        activities: nextActivities,
+        updatedAt: nextUpdatedAt,
+      }
+    : thread;
+}
+
+function applyThreadProposedPlansImportedEvent(
+  thread: Thread,
+  event: ThreadProposedPlansImportedEvent,
+): Thread {
+  let nextProposedPlans = thread.proposedPlans;
+  let nextUpdatedAt = thread.updatedAt;
+  let changed = false;
+  for (const proposedPlan of event.payload.proposedPlans) {
+    const previousPlanIndex = nextProposedPlans.findIndex((plan) => plan.id === proposedPlan.id);
+    const nextPlan = normalizeProposedPlans(
+      [proposedPlan],
+      previousPlanIndex >= 0 ? [nextProposedPlans[previousPlanIndex]!] : undefined,
+    )[0];
+    if (!nextPlan) {
+      continue;
+    }
+    const normalizedProposedPlans =
+      previousPlanIndex >= 0
+        ? nextProposedPlans.map((plan, index) => (index === previousPlanIndex ? nextPlan : plan))
+        : [...nextProposedPlans, nextPlan];
+    const normalizedUpdatedAt =
+      (nextUpdatedAt ?? thread.createdAt) > proposedPlan.updatedAt
+        ? nextUpdatedAt
+        : proposedPlan.updatedAt;
+    if (!arraysShallowEqual(nextProposedPlans, normalizedProposedPlans)) {
+      nextProposedPlans = normalizedProposedPlans;
+      changed = true;
+    }
+    if (normalizedUpdatedAt !== nextUpdatedAt) {
+      nextUpdatedAt = normalizedUpdatedAt;
+      changed = true;
+    }
+  }
+  return changed
+    ? {
+        ...thread,
+        proposedPlans: nextProposedPlans,
+        updatedAt: nextUpdatedAt,
+      }
+    : thread;
+}
+
 function applyOrchestrationEvent(
   state: AppState,
   event: OrchestrationEvent,
@@ -2626,6 +2738,8 @@ function applyOrchestrationEvent(
           const cwdChanged = thread.worktreePath !== nextWorktreePath;
 
           if (
+            (event.payload.projectId === undefined ||
+              event.payload.projectId === thread.projectId) &&
             (event.payload.title === undefined || event.payload.title === thread.title) &&
             modelSelection === thread.modelSelection &&
             (event.payload.envMode === undefined || event.payload.envMode === thread.envMode) &&
@@ -2659,6 +2773,9 @@ function applyOrchestrationEvent(
 
           return {
             ...thread,
+            ...(event.payload.projectId !== undefined
+              ? { projectId: event.payload.projectId }
+              : {}),
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             modelSelection,
             ...(event.payload.envMode !== undefined ? { envMode: event.payload.envMode } : {}),
@@ -2701,6 +2818,14 @@ function applyOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => applyThreadMessageSentEvent(thread, event),
+        options,
+      );
+
+    case "thread.messages-imported":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => applyThreadMessagesImportedEvent(thread, event),
         options,
       );
 
@@ -2837,6 +2962,14 @@ function applyOrchestrationEvent(
         options,
       );
 
+    case "thread.activities-imported":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => applyThreadActivitiesImportedEvent(thread, event),
+        options,
+      );
+
     case "thread.proposed-plan-upserted":
       return applyThreadUpdate(
         state,
@@ -2870,6 +3003,14 @@ function applyOrchestrationEvent(
                 : event.payload.proposedPlan.updatedAt,
           };
         },
+        options,
+      );
+
+    case "thread.proposed-plans-imported":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => applyThreadProposedPlansImportedEvent(thread, event),
         options,
       );
 

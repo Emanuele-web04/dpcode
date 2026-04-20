@@ -100,6 +100,8 @@ import {
   workspaceRootsEqual,
 } from "@t3tools/shared/threadWorkspace";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
+import { importLegacyT3State } from "./legacyStateImport.ts";
+import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -179,6 +181,9 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   {
     type:
       | "thread.message-sent"
+      | "thread.messages-imported"
+      | "thread.proposed-plans-imported"
+      | "thread.activities-imported"
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
@@ -188,6 +193,9 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 > {
   return (
     event.type === "thread.message-sent" ||
+    event.type === "thread.messages-imported" ||
+    event.type === "thread.proposed-plans-imported" ||
+    event.type === "thread.activities-imported" ||
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
@@ -1644,6 +1652,23 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return { threadId: thread.id };
       }
 
+      case ORCHESTRATION_WS_METHODS.importLegacyT3State: {
+        const body = stripRequestTag(request.body);
+        return yield* importLegacyT3State(
+          body.sourceBaseDir === undefined ? {} : { sourceBaseDir: body.sourceBaseDir },
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new RouteRequestError({
+                message:
+                  cause instanceof Error && cause.message.length > 0
+                    ? cause.message
+                    : "Failed to import legacy T3 Code state.",
+              }),
+          ),
+        );
+      }
+
       case ORCHESTRATION_WS_METHODS.getTurnDiff: {
         const body = stripRequestTag(request.body);
         return yield* checkpointDiffQuery.getTurnDiff(body);
@@ -1922,6 +1947,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return {
           worktrees: yield* listManagedWorktrees(),
         };
+
+      case WS_METHODS.serverGetProviderUsageSnapshot: {
+        const body = stripRequestTag(request.body);
+        return yield* getProviderUsageSnapshot(body);
+      }
 
       case WS_METHODS.serverTranscribeVoice: {
         const body = stripRequestTag(request.body);
