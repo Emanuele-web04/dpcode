@@ -42,6 +42,7 @@ import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
+import { useLegacyT3Import } from "../hooks/useLegacyT3Import";
 import { useTheme } from "../hooks/useTheme";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
@@ -271,6 +272,8 @@ function SettingsRouteView() {
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const { defaultLegacyT3BaseDir, importLegacyT3State, isImportingLegacyT3State } =
+    useLegacyT3Import();
   const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
@@ -628,7 +631,7 @@ function SettingsRouteView() {
     const confirmed = await api.dialogs.confirm(
       [
         "Repair local state?",
-        "This rebuilds local project indexes and refreshes project snapshots.",
+        "This rebuilds local project indexes, refreshes project snapshots, and consolidates duplicate inherited projects.",
         "It keeps existing chats in place, but it may take a moment.",
       ].join("\n"),
     );
@@ -643,7 +646,8 @@ function SettingsRouteView() {
       toastManager.add({
         type: "success",
         title: "Local state repaired",
-        description: "Project indexes were rebuilt without clearing existing chats.",
+        description:
+          "Project indexes were rebuilt and duplicate local projects were consolidated without clearing existing chats.",
       });
     } catch (error) {
       toastManager.add({
@@ -924,6 +928,34 @@ function SettingsRouteView() {
                   </SelectItem>
                 </SelectPopup>
               </Select>
+            }
+          />
+
+          <SettingsRow
+            title="Composer usage badge"
+            description="Show provider usage next to the model and effort controls in the composer footer."
+            resetAction={
+              settings.showComposerUsageBadge !== defaults.showComposerUsageBadge ? (
+                <SettingResetButton
+                  label="composer usage badge"
+                  onClick={() =>
+                    updateSettings({
+                      showComposerUsageBadge: defaults.showComposerUsageBadge,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.showComposerUsageBadge}
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    showComposerUsageBadge: Boolean(checked),
+                  })
+                }
+                aria-label="Show composer usage badge"
+              />
             }
           />
         </div>
@@ -2014,6 +2046,31 @@ function SettingsRouteView() {
                 onClick={openKeybindingsFile}
               >
                 {isOpeningKeybindings ? "Opening..." : "Open file"}
+              </Button>
+            }
+          />
+
+          <SettingsRow
+            title="Import from T3 Code"
+            description="Merge projects, threads, messages, plans, checkpoints, and attachments from an existing T3 Code install."
+            status={
+              <>
+                <span className="block break-all font-mono text-[11px] text-foreground">
+                  {defaultLegacyT3BaseDir}
+                </span>
+                <span className="mt-1 block">
+                  Looks for `userdata/state.sqlite` first and falls back to `dev/state.sqlite`.
+                </span>
+              </>
+            }
+            control={
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={isImportingLegacyT3State}
+                onClick={() => void importLegacyT3State()}
+              >
+                {isImportingLegacyT3State ? "Importing..." : "Import now"}
               </Button>
             }
           />

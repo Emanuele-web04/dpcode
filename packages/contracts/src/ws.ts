@@ -5,6 +5,7 @@ import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
   OrchestrationImportThreadInput,
+  OrchestrationImportLegacyT3StateInput,
   OrchestrationShellStreamItem,
   OrchestrationSubscribeShellInput,
   OrchestrationSubscribeThreadInput,
@@ -55,6 +56,7 @@ import {
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerGetProviderUsageSnapshotInput,
   ServerProviderStatusesUpdatedPayload,
   ServerVoiceTranscriptionInput,
 } from "./server";
@@ -112,6 +114,7 @@ export const WS_METHODS = {
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverListWorktrees: "server.listWorktrees",
+  serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverTranscribeVoice: "server.transcribeVoice",
   serverUpsertKeybinding: "server.upsertKeybinding",
 
@@ -155,6 +158,10 @@ const WebSocketRequestBody = Schema.Union([
     Schema.Struct({ command: ClientOrchestrationCommand }),
   ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.importLegacyT3State,
+    OrchestrationImportLegacyT3StateInput,
+  ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.repairState, OrchestrationRepairStateInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getTurnDiff, OrchestrationGetTurnDiffInput),
@@ -202,6 +209,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 

@@ -25,6 +25,7 @@ const showContextMenuFallbackMock =
       position?: { x: number; y: number },
     ) => Promise<T | null>
   >();
+const showConfirmDialogFallbackMock = vi.fn<(message: string) => Promise<boolean>>();
 const channelListeners = new Map<string, Set<(message: WsPush) => void>>();
 const latestPushByChannel = new Map<string, WsPush>();
 const subscribeMock = vi.fn<
@@ -63,6 +64,10 @@ vi.mock("./wsTransport", () => {
 
 vi.mock("./contextMenuFallback", () => ({
   showContextMenuFallback: showContextMenuFallbackMock,
+}));
+
+vi.mock("./confirmDialogFallback", () => ({
+  showConfirmDialogFallback: showConfirmDialogFallbackMock,
 }));
 
 let nextPushSequence = 1;
@@ -106,6 +111,7 @@ beforeEach(() => {
   vi.resetModules();
   requestMock.mockReset();
   showContextMenuFallbackMock.mockReset();
+  showConfirmDialogFallbackMock.mockReset();
   subscribeMock.mockClear();
   channelListeners.clear();
   latestPushByChannel.clear();
@@ -456,6 +462,37 @@ describe("wsNativeApi", () => {
       [{ id: "delete", label: "Delete", destructive: true }],
       { x: 20, y: 30 },
     );
+  });
+
+  it("uses the desktop confirm bridge when available", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: {
+        confirm,
+      },
+    });
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const result = await api.dialogs.confirm("Import from T3 Code?");
+
+    expect(result).toBe(true);
+    expect(confirm).toHaveBeenCalledWith("Import from T3 Code?");
+    expect(showConfirmDialogFallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("uses fallback confirm when desktop bridge is unavailable", async () => {
+    showConfirmDialogFallbackMock.mockResolvedValue(false);
+    Reflect.deleteProperty(getWindowForTest(), "desktopBridge");
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const result = await api.dialogs.confirm("Import from T3 Code?");
+
+    expect(result).toBe(false);
+    expect(showConfirmDialogFallbackMock).toHaveBeenCalledWith("Import from T3 Code?");
   });
 
   it("uses the desktop voice bridge when available", async () => {

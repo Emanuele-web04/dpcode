@@ -10,6 +10,7 @@ import { Effect, Schema } from "effect";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
+  ThreadActivitiesImportedPayload,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
@@ -18,7 +19,9 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadMessagesImportedPayload,
   ThreadMetaUpdatedPayload,
+  ThreadProposedPlansImportedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
@@ -27,7 +30,7 @@ import {
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
 
-type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
+type ThreadPatch = Partial<Omit<OrchestrationThread, "id">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
 
@@ -162,6 +165,39 @@ function compareThreadActivities(
   }
 
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+function maxIso(left: string, right: string): string {
+  return left > right ? left : right;
+}
+
+function upsertThreadMessage(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  message: OrchestrationMessage,
+): ReadonlyArray<OrchestrationMessage> {
+  const existingMessage = messages.find((entry) => entry.id === message.id);
+  const nextMessages = existingMessage
+    ? messages.map((entry) =>
+        entry.id === message.id
+          ? {
+              ...entry,
+              text: message.streaming
+                ? `${entry.text}${message.text}`
+                : message.text.length > 0
+                  ? message.text
+                  : entry.text,
+              streaming: message.streaming,
+              source: message.source,
+              updatedAt: message.updatedAt,
+              turnId: message.turnId,
+              ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+              ...(message.skills !== undefined ? { skills: message.skills } : {}),
+              ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+            }
+          : entry,
+      )
+    : [...messages, message];
+  return nextMessages.slice(-MAX_THREAD_MESSAGES);
 }
 
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
@@ -347,6 +383,7 @@ export function projectEvent(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
+            ...(payload.projectId !== undefined ? { projectId: payload.projectId } : {}),
             ...(payload.title !== undefined ? { title: payload.title } : {}),
             ...(payload.modelSelection !== undefined
               ? { modelSelection: payload.modelSelection }
@@ -438,38 +475,64 @@ export function projectEvent(
           event.type,
           "message",
         );
-
-        const existingMessage = thread.messages.find((entry) => entry.id === message.id);
-        const messages = existingMessage
-          ? thread.messages.map((entry) =>
-              entry.id === message.id
-                ? {
-                    ...entry,
-                    text: message.streaming
-                      ? `${entry.text}${message.text}`
-                      : message.text.length > 0
-                        ? message.text
-                        : entry.text,
-                    streaming: message.streaming,
-                    source: message.source,
-                    updatedAt: message.updatedAt,
-                    turnId: message.turnId,
-                    ...(message.attachments !== undefined
-                      ? { attachments: message.attachments }
-                      : {}),
-                    ...(message.skills !== undefined ? { skills: message.skills } : {}),
-                    ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
-                  }
-                : entry,
-            )
-          : [...thread.messages, message];
-        const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
+        const cappedMessages = upsertThreadMessage(thread.messages, message);
 
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, message.updatedAt),
+          }),
+        };
+      });
+
+    case "thread.messages-imported":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadMessagesImportedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+
+        let nextMessages = thread.messages;
+        let nextUpdatedAt = thread.updatedAt;
+        for (const importedMessage of payload.messages) {
+          const message: OrchestrationMessage = yield* decodeForEvent(
+            OrchestrationMessage,
+            {
+              id: importedMessage.messageId,
+              role: importedMessage.role,
+              text: importedMessage.text,
+              ...(importedMessage.attachments !== undefined
+                ? { attachments: importedMessage.attachments }
+                : {}),
+              ...(importedMessage.skills !== undefined ? { skills: importedMessage.skills } : {}),
+              ...(importedMessage.mentions !== undefined
+                ? { mentions: importedMessage.mentions }
+                : {}),
+              turnId: importedMessage.turnId,
+              streaming: importedMessage.streaming,
+              source: importedMessage.source,
+              createdAt: importedMessage.createdAt,
+              updatedAt: importedMessage.updatedAt,
+            },
+            event.type,
+            "message",
+          );
+          nextMessages = upsertThreadMessage(nextMessages, message);
+          nextUpdatedAt = maxIso(nextUpdatedAt, message.updatedAt);
+        }
+
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            messages: nextMessages,
+            updatedAt: nextUpdatedAt,
           }),
         };
       });
@@ -554,6 +617,46 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             proposedPlans,
             updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.proposed-plans-imported":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadProposedPlansImportedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+
+        const proposedPlans = [
+          ...thread.proposedPlans.filter(
+            (existingPlan) =>
+              !payload.proposedPlans.some((incomingPlan) => incomingPlan.id === existingPlan.id),
+          ),
+          ...payload.proposedPlans,
+        ]
+          .toSorted(
+            (left, right) =>
+              left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+          )
+          .slice(-200);
+
+        const updatedAt = payload.proposedPlans.reduce(
+          (latest, plan) => maxIso(latest, plan.updatedAt),
+          thread.updatedAt,
+        );
+
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            proposedPlans,
+            updatedAt,
           }),
         };
       });
@@ -702,6 +805,46 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
               updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.activities-imported":
+      return decodeForEvent(
+        ThreadActivitiesImportedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          const activities = [
+            ...thread.activities.filter(
+              (existingActivity) =>
+                !payload.activities.some(
+                  (incomingActivity) => incomingActivity.id === existingActivity.id,
+                ),
+            ),
+            ...payload.activities,
+          ]
+            .toSorted(compareThreadActivities)
+            .slice(-500);
+
+          const updatedAt = payload.activities.reduce(
+            (latest, activity) => maxIso(latest, activity.createdAt),
+            thread.updatedAt,
+          );
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              activities,
+              updatedAt,
             }),
           };
         }),
