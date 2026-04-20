@@ -216,6 +216,10 @@ export interface DesktopNotificationInput {
   threadId?: ThreadId;
 }
 
+export interface DesktopWindowState {
+  isMaximized: boolean;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -236,6 +240,13 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  window: {
+    minimize: () => Promise<void>;
+    toggleMaximize: () => Promise<DesktopWindowState>;
+    close: () => Promise<void>;
+    getState: () => Promise<DesktopWindowState>;
+    onState: (listener: (state: DesktopWindowState) => void) => () => void;
+  };
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;

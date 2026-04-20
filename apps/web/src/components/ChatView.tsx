@@ -261,6 +261,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { DesktopWindowControls } from "./chat/DesktopWindowControls";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -327,6 +328,7 @@ import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
+import { supportsCustomDesktopTitleBar } from "../lib/desktopWindow";
 import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
 
@@ -1006,6 +1008,7 @@ export default function ChatView({
     ? activeProject?.folderName
     : activeProject?.name;
   const isChatProject = isHomeChatContainer;
+  const usesCustomDesktopTitleBar = supportsCustomDesktopTitleBar();
   const activeProjectScripts =
     activeProject?.kind === "project" ? activeProject.scripts : undefined;
   const threadLineageThreads = useStore(
@@ -4590,6 +4593,7 @@ export default function ChatView({
               message: description,
               workspaceRoot: firstSendTarget.creation.workspaceRoot,
               loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+              repairSnapshot: () => api.orchestration.repairState().catch(() => null),
             });
           if (!snapshot || !recoveredProject) {
             throw error;
@@ -6230,12 +6234,16 @@ export default function ChatView({
         {isElectron && (
           <div
             className={cn(
-              "drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5",
-              settings.sidebarSide === "right" && "pl-[90px]",
+              "drag-region flex h-[52px] shrink-0 items-center border-b border-border",
+              usesCustomDesktopTitleBar ? "pl-5 pr-0" : "px-5",
+              !usesCustomDesktopTitleBar && settings.sidebarSide === "right" && "pl-[90px]",
             )}
           >
-            <SidebarHeaderTrigger className="size-7 shrink-0" />
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <SidebarHeaderTrigger className="size-7 shrink-0" />
+              <span className="text-xs text-muted-foreground/50">No active thread</span>
+            </div>
+            <DesktopWindowControls />
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
@@ -6891,9 +6899,17 @@ export default function ChatView({
       {/* Top bar */}
       <header
         className={cn(
-          "border-b border-border px-3 sm:px-5",
-          isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
-          isElectron && settings.sidebarSide === "right" && "pl-[90px] sm:pl-[90px]",
+          "border-b border-border",
+          isElectron
+            ? cn(
+                "drag-region flex h-[52px] items-center",
+                usesCustomDesktopTitleBar ? "pl-5 pr-0" : "px-5",
+              )
+            : "px-3 py-2 sm:px-5 sm:py-3",
+          isElectron &&
+            !usesCustomDesktopTitleBar &&
+            settings.sidebarSide === "right" &&
+            "pl-[90px]",
         )}
       >
         <ChatHeader
@@ -6955,6 +6971,7 @@ export default function ChatView({
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}
         />
+        <DesktopWindowControls />
       </header>
 
       <RenameThreadDialog
