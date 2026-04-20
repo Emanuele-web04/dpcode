@@ -1,6 +1,8 @@
 import { type FC, type SVGProps } from "react";
 import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
+import { SiGithub } from "react-icons/si";
+import { VscMcp } from "react-icons/vsc";
 import { LuSplit } from "react-icons/lu";
 import { TbArrowsRightLeft, TbPlug } from "react-icons/tb";
 import {
@@ -18,6 +20,7 @@ import {
   IconBolt,
   IconBrain,
   IconBug,
+  IconCamera,
   IconCheck,
   IconChevronDown,
   IconChevronLeft,
@@ -54,7 +57,6 @@ import {
   IconMicrophone,
   IconPalette,
   IconPaperclip,
-  IconPin,
   IconPinnedFilled,
   IconPlayerPlay,
   IconPlayerStop,
@@ -114,6 +116,7 @@ export const ArrowUpIcon = adaptIcon(IconArrowUp);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
 export const BotIcon = adaptIcon(IconRobot);
 export const BugIcon = adaptIcon(IconBug);
+export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
 export const ChevronDownIcon = adaptIcon(IconChevronDown);
 export const ChevronLeftIcon = adaptIcon(IconChevronLeft);
@@ -143,8 +146,14 @@ export const GitCommitIcon: LucideIcon = (props) => (
   <PiGitCommit className={props.className} style={props.style} />
 );
 export const GitForkIcon = adaptIcon(IconGitFork);
+export const GitHubIcon: LucideIcon = (props) => (
+  <SiGithub className={props.className} style={props.style} />
+);
 export const GitPullRequestIcon = adaptIcon(IconGitPullRequest);
 export const GlobeIcon = adaptIcon(IconWorld);
+export const McpIcon: LucideIcon = (props) => (
+  <VscMcp className={props.className} style={props.style} />
+);
 export const PlugIcon: LucideIcon = (props) => (
   <TbPlug className={props.className} style={props.style} />
 );
@@ -167,7 +176,23 @@ export const MicIcon = adaptIcon(IconMicrophone);
 export const PanelLeftCloseIcon = adaptIcon(IconLayoutSidebarLeftCollapse);
 export const PanelLeftIcon = adaptIcon(IconLayoutSidebarLeftExpand);
 export const PanelRightCloseIcon = adaptIcon(IconLayoutSidebarRightCollapse);
-export const PinIcon = adaptIcon(IconPin);
+export const PinIcon: LucideIcon = (props) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M8.375 15.625L12.2092 19.4592C13.3676 20.6175 15.351 19.9682 15.6001 18.3491L16.3396 13.5425C16.44 12.8901 16.8558 12.3292 17.4509 12.0435L20.2054 10.7214C21.4483 10.1248 21.729 8.47902 20.7542 7.50413L16.4959 3.24583C15.521 2.27093 13.8752 2.55164 13.2786 3.79458L11.9564 6.54908C11.6708 7.14417 11.1099 7.55999 10.4575 7.66036L5.65092 8.39984C4.03176 8.64894 3.38243 10.6324 4.54081 11.7908L8.375 15.625Z" />
+    <path d="M8.38235 15.6176L8.375 15.625" />
+    <path d="M8.375 15.625L3.75 20.25" />
+  </svg>
+);
 export const PinnedFilledIcon = adaptIcon(IconPinnedFilled);
 export const PlayIcon = adaptIcon(IconPlayerPlay);
 export const Plus = adaptIcon(IconPlus);
