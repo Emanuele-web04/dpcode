@@ -49,6 +49,7 @@ import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import { useRetainedThreadDetailIds } from "../threadDetailSubscriptionRetention";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { invalidateGitQueries } from "../lib/gitReactQuery";
+import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 
@@ -769,12 +770,15 @@ function DesktopProjectBootstrap() {
     attemptedRecoveryRef.current = true;
 
     // Shell subscriptions should normally hydrate the sidebar. If the desktop
-    // UI comes up empty against a non-empty local database, force one read-model
-    // refresh and fall back to repair only when the snapshot is still empty.
+    // UI comes up empty, or threads resolve before their project rows do, force
+    // one read-model refresh and fall back to repair before accepting the state.
     void api.orchestration
       .getSnapshot()
       .then((snapshot) => {
-        if (snapshot.projects.length > 0 || snapshot.threads.length > 0) {
+        const needsRepair =
+          (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
+          hasLiveThreadsWithMissingProjects(snapshot);
+        if (!needsRepair) {
           syncServerReadModel(snapshot);
           return snapshot;
         }

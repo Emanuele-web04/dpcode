@@ -15,6 +15,11 @@ const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_CHECK_CHANNEL = "desktop:update-check";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const WINDOW_STATE_CHANNEL = "desktop:window-state";
+const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
+const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
+const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
+const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const wsUrl = process.env.T3CODE_DESKTOP_WS_URL ?? null;
@@ -55,6 +60,23 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(UPDATE_STATE_CHANNEL, wrappedListener);
     };
+  },
+  window: {
+    minimize: () => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL),
+    toggleMaximize: () => ipcRenderer.invoke(WINDOW_TOGGLE_MAXIMIZE_CHANNEL),
+    close: () => ipcRenderer.invoke(WINDOW_CLOSE_CHANNEL),
+    getState: () => ipcRenderer.invoke(WINDOW_GET_STATE_CHANNEL),
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "object" || state === null) return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+
+      ipcRenderer.on(WINDOW_STATE_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(WINDOW_STATE_CHANNEL, wrappedListener);
+      };
+    },
   },
   notifications: {
     isSupported: () => ipcRenderer.invoke(NOTIFICATIONS_IS_SUPPORTED_CHANNEL),

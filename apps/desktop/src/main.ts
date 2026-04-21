@@ -18,12 +18,13 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { MenuItemConstructorOptions } from "electron";
+import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
+  DesktopWindowState,
 } from "@t3tools/contracts";
 import { autoUpdater } from "electron-updater";
 
@@ -61,6 +62,7 @@ import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runti
 import { DesktopBrowserManager } from "./browserManager";
 import { registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
 import { BrowserUsePipeServer } from "./browserUsePipeServer";
+import { resolveDesktopWindowChrome, resolveDesktopWindowState } from "./windowChrome";
 
 syncShellEnvironment();
 
@@ -76,6 +78,11 @@ const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_CHECK_CHANNEL = "desktop:update-check";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const WINDOW_STATE_CHANNEL = "desktop:window-state";
+const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
+const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
+const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
+const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const BASE_DIR = process.env.T3CODE_HOME?.trim() || Path.join(OS.homedir(), ".dpcode");
@@ -978,6 +985,23 @@ function emitUpdateState(): void {
   }
 }
 
+function resolveIpcOwnerWindow(event: IpcMainInvokeEvent | undefined): BrowserWindow | null {
+  return (
+    (event ? BrowserWindow.fromWebContents(event.sender) : null) ??
+    BrowserWindow.getFocusedWindow() ??
+    mainWindow
+  );
+}
+
+function emitWindowState(window: BrowserWindow | null): void {
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+
+  const state: DesktopWindowState = resolveDesktopWindowState(window);
+  window.webContents.send(WINDOW_STATE_CHANNEL, state);
+}
+
 function setUpdateState(patch: Partial<DesktopUpdateState>): void {
   updateState = { ...updateState, ...patch };
   emitUpdateState();
@@ -1604,6 +1628,40 @@ function registerIpcHandlers(): void {
     } satisfies DesktopUpdateActionResult;
   });
 
+  ipcMain.removeHandler(WINDOW_GET_STATE_CHANNEL);
+  ipcMain.handle(WINDOW_GET_STATE_CHANNEL, async (event) => {
+    const window = resolveIpcOwnerWindow(event);
+    return window ? resolveDesktopWindowState(window) : { isMaximized: false };
+  });
+
+  ipcMain.removeHandler(WINDOW_MINIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_MINIMIZE_CHANNEL, async (event) => {
+    resolveIpcOwnerWindow(event)?.minimize();
+  });
+
+  ipcMain.removeHandler(WINDOW_TOGGLE_MAXIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, async (event) => {
+    const window = resolveIpcOwnerWindow(event);
+    if (!window) {
+      return { isMaximized: false };
+    }
+
+    if (window.isFullScreen()) {
+      window.setFullScreen(false);
+    } else if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+
+    return resolveDesktopWindowState(window);
+  });
+
+  ipcMain.removeHandler(WINDOW_CLOSE_CHANNEL);
+  ipcMain.handle(WINDOW_CLOSE_CHANNEL, async (event) => {
+    resolveIpcOwnerWindow(event)?.close();
+  });
+
   ipcMain.removeHandler(NOTIFICATIONS_IS_SUPPORTED_CHANNEL);
   ipcMain.handle(NOTIFICATIONS_IS_SUPPORTED_CHANNEL, async () => Notification.isSupported());
 
@@ -1655,10 +1713,7 @@ function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     ...getIconOption(),
     title: APP_DISPLAY_NAME,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 18 },
-    vibrancy: "under-window",
-    visualEffectState: "active",
+    ...resolveDesktopWindowChrome(process.platform),
     backgroundColor: "#00000000",
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
@@ -1720,10 +1775,16 @@ function createWindow(): BrowserWindow {
   window.webContents.on("did-finish-load", () => {
     window.setTitle(APP_DISPLAY_NAME);
     emitUpdateState();
+    emitWindowState(window);
   });
   window.once("ready-to-show", () => {
     window.show();
   });
+  const emitCurrentWindowState = () => emitWindowState(window);
+  window.on("maximize", emitCurrentWindowState);
+  window.on("unmaximize", emitCurrentWindowState);
+  window.on("enter-full-screen", emitCurrentWindowState);
+  window.on("leave-full-screen", emitCurrentWindowState);
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);

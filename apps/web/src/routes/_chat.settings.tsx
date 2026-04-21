@@ -25,6 +25,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { DesktopWindowControls } from "../components/chat/DesktopWindowControls";
 import { ClaudeAI, Gemini, OpenAI } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
@@ -43,6 +44,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip"
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { supportsCustomDesktopTitleBar } from "../lib/desktopWindow";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
   ArchiveIcon,
@@ -2117,8 +2119,11 @@ function SettingsRouteView() {
         {isElectron ? (
           <div
             className={cn(
-              "drag-region flex h-[52px] shrink-0 items-center border-b border-border/70 px-5",
-              settings.sidebarSide === "right" && "pl-[90px]",
+              "drag-region flex h-[52px] shrink-0 items-center border-b border-border/70",
+              supportsCustomDesktopTitleBar() ? "pl-5 pr-0" : "px-5",
+              !supportsCustomDesktopTitleBar() &&
+                settings.sidebarSide === "right" &&
+                "pl-[90px]",
             )}
           >
             <SidebarHeaderTrigger className="size-7 shrink-0" />
@@ -2136,6 +2141,7 @@ function SettingsRouteView() {
                 Restore defaults
               </Button>
             </div>
+            <DesktopWindowControls />
           </div>
         ) : (
           <header className="border-b border-border/70 px-3 py-2 sm:px-5">

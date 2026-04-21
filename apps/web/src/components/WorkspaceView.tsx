@@ -1,22 +1,22 @@
-// FILE: WorkspaceView.tsx
-// Purpose: Render a dedicated terminal-only workspace page backed by a synthetic terminal scope.
-// Layer: Workspace route surface
-
-import { Plus, SettingsIcon } from "~/lib/icons";
 import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { readNativeApi } from "~/nativeApi";
 import { useAppSettings } from "~/appSettings";
+import { DesktopWindowControls } from "~/components/chat/DesktopWindowControls";
+import { readNativeApi } from "~/nativeApi";
 import { Button } from "~/components/ui/button";
 import { SidebarHeaderTrigger, SidebarInset } from "~/components/ui/sidebar";
+import { isElectron } from "~/env";
+import { Plus, SettingsIcon } from "~/lib/icons";
+import { supportsCustomDesktopTitleBar } from "~/lib/desktopWindow";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
 } from "~/lib/terminalCloseConfirmation";
 import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { cn } from "~/lib/utils";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import WorkspaceSettingsSheet from "./WorkspaceSettingsSheet";
@@ -38,6 +38,7 @@ function randomTerminalId(): string {
 
 export default function WorkspaceView({ workspaceId }: { workspaceId: string }) {
   const { settings } = useAppSettings();
+  const usesCustomDesktopTitleBar = supportsCustomDesktopTitleBar();
   const workspace = useWorkspaceStore((state) =>
     state.workspacePages.find((entry) => entry.id === workspaceId),
   );
@@ -390,8 +391,21 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <header className="border-b border-border px-3 sm:px-5">
-          <div className="flex h-[52px] items-center gap-2 sm:gap-3">
+        <header
+          className={cn(
+            "border-b border-border",
+            isElectron
+              ? cn(
+                  "drag-region flex h-[52px] items-center",
+                  usesCustomDesktopTitleBar ? "pl-5 pr-0" : "px-5",
+                  !usesCustomDesktopTitleBar &&
+                    settings.sidebarSide === "right" &&
+                    "pl-[90px]",
+                )
+              : "px-3 sm:px-5",
+          )}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
             <SidebarHeaderTrigger className="size-7 shrink-0" />
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {renaming ? (
@@ -415,7 +429,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
                 />
               ) : (
                 <h2
-                  className="max-w-[clamp(16rem,50vw,40rem)] cursor-default truncate text-sm font-medium text-foreground"
+                  className="max-w-[clamp(16rem,50vw,40rem)] cursor-default truncate text-sm font-medium text-foreground [-webkit-app-region:no-drag]"
                   title="Double-click to rename"
                   onDoubleClick={() => setRenaming(true)}
                 >
@@ -443,6 +457,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
               </Button>
             </div>
           </div>
+          <DesktopWindowControls />
         </header>
 
         <div className="min-h-0 min-w-0 flex-1">
