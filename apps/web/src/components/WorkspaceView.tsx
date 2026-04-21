@@ -398,6 +398,9 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
               ? cn(
                   "drag-region flex h-[52px] items-center",
                   usesCustomDesktopTitleBar ? "pl-5 pr-0" : "px-5",
+                  !usesCustomDesktopTitleBar &&
+                    settings.sidebarSide === "right" &&
+                    "pl-[90px]",
                 )
               : "px-3 sm:px-5",
           )}
