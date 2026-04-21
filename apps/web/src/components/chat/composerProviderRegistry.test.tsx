@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { getComposerProviderState } from "./composerProviderRegistry";
+import { ThreadId } from "@t3tools/contracts";
+import { isValidElement, type ReactElement } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { getComposerProviderState, renderProviderTraitsPicker } from "./composerProviderRegistry";
 
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
@@ -259,5 +261,32 @@ describe("getComposerProviderState", () => {
       promptEffort: "HIGH",
       modelOptionsForDispatch: undefined,
     });
+  });
+});
+
+describe("renderProviderTraitsPicker", () => {
+  it("keeps Gemini traits pickers controlled by shared composer state", () => {
+    const onOpenChange = vi.fn();
+    const picker = renderProviderTraitsPicker({
+      provider: "gemini",
+      threadId: ThreadId.makeUnsafe("thread-gemini-traits"),
+      model: "auto-gemini-3",
+      modelOptions: undefined,
+      prompt: "",
+      open: true,
+      onOpenChange,
+      shortcutLabel: "Ctrl+Shift+E",
+      onPromptChange: () => {},
+    });
+
+    expect(isValidElement(picker)).toBe(true);
+    const pickerElement = picker as ReactElement<{
+      open?: boolean;
+      onOpenChange?: (open: boolean) => void;
+      shortcutLabel?: string | null;
+    }>;
+    expect(pickerElement.props.open).toBe(true);
+    expect(pickerElement.props.onOpenChange).toBe(onOpenChange);
+    expect(pickerElement.props.shortcutLabel).toBe("Ctrl+Shift+E");
   });
 });

@@ -414,6 +414,17 @@ export function shouldRenderTerminalWorkspace(options: {
   );
 }
 
+export function shouldEnableProviderModelsQuery(input: {
+  provider: "codex" | "claudeAgent" | "gemini";
+  lockedProvider: "codex" | "claudeAgent" | "gemini" | null;
+}): boolean {
+  if (input.provider !== "gemini") {
+    return true;
+  }
+
+  return input.lockedProvider === null || input.lockedProvider === "gemini";
+}
+
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {
   isLastTerminal: boolean;
   isServerThread: boolean;

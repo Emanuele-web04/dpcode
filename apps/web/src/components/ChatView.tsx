@@ -100,6 +100,7 @@ import {
   buildThreadBreadcrumbs,
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
+  shouldEnableProviderModelsQuery,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -1244,7 +1245,7 @@ export default function ChatView({
     providerModelsQueryOptions({
       provider: "gemini",
       binaryPath: settings.geminiBinaryPath || null,
-      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+      enabled: shouldEnableProviderModelsQuery({ provider: "gemini", lockedProvider }),
     }),
   );
   const claudeDynamicAgentsQuery = useQuery(
