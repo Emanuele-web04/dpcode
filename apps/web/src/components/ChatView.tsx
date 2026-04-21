@@ -330,7 +330,10 @@ import {
 } from "../lib/threadEnvironment";
 import { supportsCustomDesktopTitleBar } from "../lib/desktopWindow";
 import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
-import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
+import {
+  isDuplicateProjectCreateError,
+  waitForRecoverableProjectForDuplicateCreate,
+} from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -4587,6 +4590,10 @@ export default function ChatView({
         } catch (error) {
           const description =
             error instanceof Error ? error.message : "Failed to create the selected project.";
+          if (!isDuplicateProjectCreateError(description)) {
+            throw error;
+          }
+
           // If the server already knows this workspace root, reuse that project and continue.
           const { snapshot, project: recoveredProject } =
             await waitForRecoverableProjectForDuplicateCreate({

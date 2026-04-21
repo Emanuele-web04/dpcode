@@ -426,7 +426,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
                 />
               ) : (
                 <h2
-                  className="max-w-[clamp(16rem,50vw,40rem)] cursor-default truncate text-sm font-medium text-foreground"
+                  className="max-w-[clamp(16rem,50vw,40rem)] cursor-default truncate text-sm font-medium text-foreground [-webkit-app-region:no-drag]"
                   title="Double-click to rename"
                   onDoubleClick={() => setRenaming(true)}
                 >
