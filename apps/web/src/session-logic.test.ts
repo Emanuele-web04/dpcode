@@ -1048,6 +1048,120 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("extracts screenshot image previews from MCP tool result payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "browser-screenshot",
+        kind: "tool.completed",
+        summary: "MCP tool call",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          data: {
+            toolName: "browser_capture_screenshot",
+            result: {
+              content: [
+                { type: "text", text: "Captured browser.png." },
+                {
+                  type: "image",
+                  mimeType: "image/png",
+                  data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+
+    expect(entry?.imagePreview).toMatchObject({
+      id: "browser-screenshot:image",
+      name: "browser-screenshot.png",
+      mimeType: "image/png",
+      previewUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+    });
+  });
+
+  it("keeps turnless screenshot image previews when deriving latest-turn work", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "previous-command",
+        kind: "tool.completed",
+        summary: "Ran command",
+        turnId: "turn-previous",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+        },
+      }),
+      makeActivity({
+        id: "turnless-browser-screenshot",
+        kind: "tool.completed",
+        summary: "MCP tool call",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          data: {
+            toolName: "browser_capture_screenshot",
+            result: {
+              content: [
+                {
+                  type: "image",
+                  mimeType: "image/png",
+                  data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-current"));
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("turnless-browser-screenshot");
+    expect(entries[0]?.imagePreview?.previewUrl).toBe(
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+    );
+  });
+
+  it("extracts screenshot previews from nested image_url payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "browser-screenshot-image-url",
+        kind: "tool.completed",
+        summary: "MCP tool call",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          data: {
+            result: {
+              content: [
+                {
+                  type: "input_image",
+                  image_url: {
+                    url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+
+    expect(entry?.imagePreview).toMatchObject({
+      id: "browser-screenshot-image-url:image",
+      mimeType: "image/png",
+      previewUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+    });
+  });
+
   it("uses present-tense command headings while the command is still running", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1320,6 +1434,96 @@ describe("deriveTimelineEntries", () => {
         planMarkdown: "# Ship it",
         implementedAt: null,
         implementationThreadId: null,
+      },
+    });
+  });
+
+  it("hydrates assistant sandbox image markdown from matching browser screenshot work entries", () => {
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("message-1"),
+          role: "assistant",
+          text: "Here it is:\n\n![Screenshot](sandbox:/browser-shot.png)",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "work-browser-screenshot",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          label: "Tool call",
+          tone: "tool",
+          imagePreview: {
+            id: "work-browser-screenshot:image",
+            name: "browser-shot.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+            previewUrl: "data:image/png;base64,AQIDBA==",
+          },
+        },
+      ],
+    );
+
+    const messageEntry = entries.find((entry) => entry.kind === "message");
+    expect(messageEntry).toMatchObject({
+      kind: "message",
+      message: {
+        attachments: [
+          {
+            type: "image",
+            name: "browser-shot.png",
+            mimeType: "image/png",
+            previewUrl: "data:image/png;base64,AQIDBA==",
+          },
+        ],
+      },
+    });
+  });
+
+  it("hydrates assistant screenshot prose from the nearest prior browser screenshot work entry", () => {
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("message-1"),
+          role: "assistant",
+          text: "Here’s the screenshot from DP Code’s in-app browser. It rendered as blank.",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "work-browser-screenshot",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          label: "Tool call",
+          tone: "tool",
+          imagePreview: {
+            id: "work-browser-screenshot:image",
+            name: "browser-shot.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+            previewUrl: "data:image/png;base64,AQIDBA==",
+          },
+        },
+      ],
+    );
+
+    const messageEntry = entries.find((entry) => entry.kind === "message");
+    expect(messageEntry).toMatchObject({
+      kind: "message",
+      message: {
+        attachments: [
+          {
+            type: "image",
+            name: "browser-shot.png",
+            mimeType: "image/png",
+            previewUrl: "data:image/png;base64,AQIDBA==",
+          },
+        ],
       },
     });
   });

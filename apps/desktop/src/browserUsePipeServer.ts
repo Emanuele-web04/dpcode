@@ -96,6 +96,10 @@ function asPositiveInteger(value: unknown): number | null {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
+function asMouseButton(value: unknown): "left" | "middle" | "right" | null {
+  return value === "left" || value === "middle" || value === "right" ? value : null;
+}
+
 function requireSessionId(params: unknown): string {
   const sessionId = asString(asObject(params)?.session_id);
   if (!sessionId) {
@@ -353,6 +357,22 @@ export class BrowserUsePipeServer {
         return {};
       case "moveMouse":
         return this.moveMouseForSession(requireSessionId(params), params);
+      case "click":
+        return this.clickForSession(requireSessionId(params), params);
+      case "tap":
+        return this.clickForSession(requireSessionId(params), {
+          ...(asObject(params) ?? {}),
+          button: "left",
+        });
+      case "doubleClick":
+        return this.clickForSession(requireSessionId(params), {
+          ...(asObject(params) ?? {}),
+          clickCount: 2,
+        });
+      case "scroll":
+        return this.scrollForSession(requireSessionId(params), params);
+      case "typeText":
+        return this.typeTextForSession(requireSessionId(params), params);
       case "attach":
         return this.attachForSession(requireSessionId(params), params);
       case "detach":
@@ -668,6 +688,75 @@ export class BrowserUsePipeServer {
       tabId: tracked.tabId,
       x,
       y,
+    });
+    return {};
+  }
+
+  private async clickForSession(
+    sessionId: string,
+    params: unknown,
+  ): Promise<Record<string, never>> {
+    const request = asObject(params);
+    const x = asFiniteNumber(request?.x);
+    const y = asFiniteNumber(request?.y);
+    if (x === null || y === null) {
+      throw new Error("click requires finite x and y coordinates");
+    }
+    const tracked = this.resolveTrackedTabForSession(sessionId, params);
+    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    const button = asMouseButton(request?.button);
+    const clickCount = asPositiveInteger(request?.clickCount);
+    await this.browserManager.clickBrowserUseMouse({
+      threadId: tracked.threadId,
+      tabId: tracked.tabId,
+      x,
+      y,
+      ...(button ? { button } : {}),
+      ...(clickCount ? { clickCount } : {}),
+    });
+    return {};
+  }
+
+  private async scrollForSession(
+    sessionId: string,
+    params: unknown,
+  ): Promise<Record<string, never>> {
+    const request = asObject(params);
+    const x = asFiniteNumber(request?.x);
+    const y = asFiniteNumber(request?.y);
+    const deltaX = asFiniteNumber(request?.deltaX);
+    const deltaY = asFiniteNumber(request?.deltaY);
+    if (x === null || y === null || deltaX === null || deltaY === null) {
+      throw new Error("scroll requires finite x, y, deltaX, and deltaY coordinates");
+    }
+    const tracked = this.resolveTrackedTabForSession(sessionId, params);
+    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    await this.browserManager.scrollBrowserUseMouse({
+      threadId: tracked.threadId,
+      tabId: tracked.tabId,
+      x,
+      y,
+      deltaX,
+      deltaY,
+    });
+    return {};
+  }
+
+  private async typeTextForSession(
+    sessionId: string,
+    params: unknown,
+  ): Promise<Record<string, never>> {
+    const request = asObject(params);
+    const text = asString(request?.text);
+    if (text === null) {
+      throw new Error("typeText requires text");
+    }
+    const tracked = this.resolveTrackedTabForSession(sessionId, params);
+    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    await this.browserManager.typeBrowserUseText({
+      threadId: tracked.threadId,
+      tabId: tracked.tabId,
+      text,
     });
     return {};
   }

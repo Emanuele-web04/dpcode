@@ -54,6 +54,15 @@ export interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
+  imagePreview?: WorkLogImagePreview;
+}
+
+export interface WorkLogImagePreview {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes?: number;
+  previewUrl: string;
 }
 
 export interface WorkLogSubagent {
@@ -646,12 +655,27 @@ export function deriveWorkLogEntries(
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries = ordered
-    .filter((activity) =>
-      latestTurnId
-        ? activity.turnId === latestTurnId ||
-          (activity.kind === "context-compaction" && activity.turnId === null)
-        : true,
-    )
+    .filter((activity) => {
+      if (!latestTurnId) {
+        return true;
+      }
+      if (
+        activity.turnId === latestTurnId ||
+        (activity.kind === "context-compaction" && activity.turnId === null)
+      ) {
+        return true;
+      }
+      // Browser screenshot tool results can arrive from provider-side MCP plumbing
+      // without a turn id. Keep image-bearing rows so captured screenshots still
+      // appear in the chat instead of being reduced to assistant text.
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : null;
+      return (
+        activity.turnId === null && extractWorkLogImagePreview(activity.id, payload) !== undefined
+      );
+    })
     .filter((activity) => activity.kind !== "tool.started")
     .filter((activity) => !isCollabAgentToolActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
@@ -695,6 +719,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
   const toolName = extractToolName(payload);
+  const imagePreview = extractWorkLogImagePreview(activity.id, payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
@@ -722,6 +747,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (requestKind) {
     entry.requestKind = requestKind;
+  }
+  if (imagePreview) {
+    entry.imagePreview = imagePreview;
   }
   const subagents = extractCollabSubagents(payload);
   if (subagents.length > 0) {
@@ -800,6 +828,7 @@ function mergeDerivedWorkLogEntries(
   const requestKind = next.requestKind ?? previous.requestKind;
   const subagents = next.subagents ?? previous.subagents;
   const subagentAction = next.subagentAction ?? previous.subagentAction;
+  const imagePreview = next.imagePreview ?? previous.imagePreview;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   return {
@@ -813,6 +842,7 @@ function mergeDerivedWorkLogEntries(
     ...(requestKind ? { requestKind } : {}),
     ...(subagents ? { subagents } : {}),
     ...(subagentAction ? { subagentAction } : {}),
+    ...(imagePreview ? { imagePreview } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
   };
@@ -1300,6 +1330,158 @@ function extractChangedFiles(payload: Record<string, unknown> | null): string[] 
   return changedFiles;
 }
 
+function normalizeImageMimeType(value: unknown): string | null {
+  const mimeType = asTrimmedString(value)?.toLowerCase() ?? null;
+  return mimeType?.startsWith("image/") ? mimeType : null;
+}
+
+function normalizeBase64ImageData(value: unknown): {
+  mimeType?: string;
+  base64: string;
+} | null {
+  const raw = asTrimmedString(value);
+  if (!raw) {
+    return null;
+  }
+  const dataUrlMatch = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i.exec(raw);
+  if (dataUrlMatch?.[1] && dataUrlMatch[2]) {
+    return {
+      mimeType: dataUrlMatch[1].toLowerCase(),
+      base64: dataUrlMatch[2].replace(/\s+/g, ""),
+    };
+  }
+  const compact = raw.replace(/\s+/g, "");
+  if (!/^[a-z0-9+/]+={0,2}$/i.test(compact) || compact.length < 12) {
+    return null;
+  }
+  return { base64: compact };
+}
+
+function estimateBase64ByteLength(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function imagePreviewName(record: Record<string, unknown>, fallbackName: string): string {
+  return (
+    asTrimmedString(record.name) ??
+    asTrimmedString(record.filename) ??
+    asTrimmedString(record.fileName) ??
+    asTrimmedString(record.title) ??
+    fallbackName
+  );
+}
+
+function imagePreviewFromRecord(
+  activityId: string,
+  record: Record<string, unknown>,
+): WorkLogImagePreview | null {
+  const rawData =
+    record.data ??
+    record.base64 ??
+    record.imageData ??
+    record.image_data ??
+    record.imageUrl ??
+    record.image_url ??
+    record.url;
+  const normalizedData = normalizeBase64ImageData(rawData);
+  if (!normalizedData) {
+    return null;
+  }
+  const mimeType =
+    normalizeImageMimeType(record.mimeType) ??
+    normalizeImageMimeType(record.mime_type) ??
+    normalizeImageMimeType(record.mediaType) ??
+    normalizeImageMimeType(record.media_type) ??
+    normalizedData.mimeType ??
+    null;
+  if (!mimeType) {
+    return null;
+  }
+  const type = asTrimmedString(record.type)?.toLowerCase() ?? null;
+  if (type && type !== "image" && type !== "output_image" && !type.includes("image")) {
+    return null;
+  }
+  const sizeBytes =
+    typeof record.sizeBytes === "number" && Number.isFinite(record.sizeBytes)
+      ? record.sizeBytes
+      : estimateBase64ByteLength(normalizedData.base64);
+  return {
+    id: `${activityId}:image`,
+    name: imagePreviewName(record, "browser-screenshot.png"),
+    mimeType,
+    sizeBytes,
+    previewUrl: `data:${mimeType};base64,${normalizedData.base64}`,
+  };
+}
+
+function findImagePreviewInPayload(
+  activityId: string,
+  value: unknown,
+  seen: WeakSet<object>,
+  depth: number,
+): WorkLogImagePreview | null {
+  if (depth > 8) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const image = findImagePreviewInPayload(activityId, entry, seen, depth + 1);
+      if (image) {
+        return image;
+      }
+    }
+    return null;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  if (seen.has(record)) {
+    return null;
+  }
+  seen.add(record);
+
+  const image = imagePreviewFromRecord(activityId, record);
+  if (image) {
+    return image;
+  }
+
+  for (const nestedKey of [
+    "content",
+    "output",
+    "result",
+    "results",
+    "item",
+    "data",
+    "message",
+    "messages",
+    "parts",
+    "toolResult",
+    "tool_result",
+    "imageUrl",
+    "image_url",
+    "source",
+  ]) {
+    if (!(nestedKey in record)) {
+      continue;
+    }
+    const nestedImage = findImagePreviewInPayload(activityId, record[nestedKey], seen, depth + 1);
+    if (nestedImage) {
+      return nestedImage;
+    }
+  }
+  return null;
+}
+
+function extractWorkLogImagePreview(
+  activityId: string,
+  payload: Record<string, unknown> | null,
+): WorkLogImagePreview | undefined {
+  const image = findImagePreviewInPayload(activityId, payload, new WeakSet<object>(), 0);
+  return image ?? undefined;
+}
+
 function compareActivitiesByOrder(
   left: OrchestrationThreadActivity,
   right: OrchestrationThreadActivity,
@@ -1354,11 +1536,15 @@ export function deriveTimelineEntries(
   proposedPlans: ProposedPlan[],
   workEntries: WorkLogEntry[],
 ): TimelineEntry[] {
+  const imagePreviewBySandboxName = buildSandboxImagePreviewMap(workEntries);
   const messageRows: TimelineEntry[] = messages.map((message) => ({
     id: message.id,
     kind: "message",
     createdAt: message.createdAt,
-    message,
+    message: attachNearbyBrowserScreenshotPreview(
+      attachSandboxImagePreviews(message, imagePreviewBySandboxName),
+      workEntries,
+    ),
   }));
   const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
     id: proposedPlan.id,
@@ -1375,6 +1561,152 @@ export function deriveTimelineEntries(
   return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
+}
+
+const MARKDOWN_SANDBOX_IMAGE_REGEX =
+  /!\[[^\]]*]\(\s*sandbox:\/([^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/g;
+
+function buildSandboxImagePreviewMap(
+  workEntries: ReadonlyArray<WorkLogEntry>,
+): Map<string, WorkLogImagePreview> {
+  const previews = new Map<string, WorkLogImagePreview>();
+  for (const entry of workEntries) {
+    const imagePreview = entry.imagePreview;
+    if (!imagePreview) {
+      continue;
+    }
+    previews.set(imagePreview.name, imagePreview);
+  }
+  return previews;
+}
+
+function sandboxImageAttachmentId(messageId: MessageId, imageName: string): string {
+  const safeName = imageName
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[^a-z0-9_-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+  return `${messageId}-sandbox-${safeName || "image"}`.slice(0, 128);
+}
+
+function sandboxImageNamesFromMarkdown(text: string): string[] {
+  const names = new Set<string>();
+  for (const match of text.matchAll(MARKDOWN_SANDBOX_IMAGE_REGEX)) {
+    const encodedName = match[1];
+    if (!encodedName) {
+      continue;
+    }
+    try {
+      names.add(decodeURIComponent(encodedName));
+    } catch {
+      names.add(encodedName);
+    }
+  }
+  return [...names];
+}
+
+function attachSandboxImagePreviews(
+  message: ChatMessage,
+  imagePreviewBySandboxName: ReadonlyMap<string, WorkLogImagePreview>,
+): ChatMessage {
+  if (message.role !== "assistant") {
+    return message;
+  }
+  const sandboxImageNames = sandboxImageNamesFromMarkdown(message.text);
+  if (sandboxImageNames.length === 0) {
+    return message;
+  }
+  const existingAttachments = message.attachments ?? [];
+  const existingImageNames = new Set(
+    existingAttachments
+      .filter((attachment) => attachment.type === "image")
+      .map((attachment) => attachment.name),
+  );
+  const imageAttachments = sandboxImageNames.flatMap((imageName) => {
+    if (existingImageNames.has(imageName)) {
+      return [];
+    }
+    const preview = imagePreviewBySandboxName.get(imageName);
+    if (!preview) {
+      return [];
+    }
+    return [
+      {
+        type: "image" as const,
+        id: sandboxImageAttachmentId(message.id, imageName),
+        name: preview.name,
+        mimeType: preview.mimeType,
+        sizeBytes: preview.sizeBytes ?? 0,
+        previewUrl: preview.previewUrl,
+      },
+    ];
+  });
+
+  if (imageAttachments.length === 0) {
+    return message;
+  }
+  return {
+    ...message,
+    attachments: [...existingAttachments, ...imageAttachments],
+  };
+}
+
+function shouldHydrateNearbyScreenshot(message: ChatMessage): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  if ((message.attachments ?? []).some((attachment) => attachment.type === "image")) {
+    return false;
+  }
+  const normalizedText = message.text.toLowerCase();
+  return (
+    normalizedText.includes("screenshot") &&
+    (normalizedText.includes("browser") ||
+      normalizedText.includes("captured") ||
+      normalizedText.includes("viewport"))
+  );
+}
+
+function attachNearbyBrowserScreenshotPreview(
+  message: ChatMessage,
+  workEntries: ReadonlyArray<WorkLogEntry>,
+): ChatMessage {
+  if (!shouldHydrateNearbyScreenshot(message)) {
+    return message;
+  }
+  const messageCreatedAt = Date.parse(message.createdAt);
+  if (Number.isNaN(messageCreatedAt)) {
+    return message;
+  }
+  const nearbyScreenshot = [...workEntries]
+    .filter((entry) => {
+      if (!entry.imagePreview) {
+        return false;
+      }
+      const entryCreatedAt = Date.parse(entry.createdAt);
+      return !Number.isNaN(entryCreatedAt) && entryCreatedAt <= messageCreatedAt;
+    })
+    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .at(0)?.imagePreview;
+
+  if (!nearbyScreenshot) {
+    return message;
+  }
+
+  return {
+    ...message,
+    attachments: [
+      ...(message.attachments ?? []),
+      {
+        type: "image",
+        id: sandboxImageAttachmentId(message.id, nearbyScreenshot.name),
+        name: nearbyScreenshot.name,
+        mimeType: nearbyScreenshot.mimeType,
+        sizeBytes: nearbyScreenshot.sizeBytes ?? 0,
+        previewUrl: nearbyScreenshot.previewUrl,
+      },
+    ],
+  };
 }
 
 export function inferCheckpointTurnCountByTurnId(

@@ -14,12 +14,14 @@ export const DPCODE_BROWSER_USE_PROVIDER_PROMPT = [
   "DP Code exposes the in-app browser through the dpcode-browser MCP tools.",
   "Use these tools when the user asks you to inspect, navigate, test, screenshot, or interact with browser content.",
   "Prefer browser_navigate for opening pages, browser_list_tabs/browser_create_tab for tab control, and browser_execute_cdp only when a lower-level Chrome DevTools Protocol command is needed.",
+  "For user-like interaction, locate the target's viewport bounds and use browser_click/browser_tap/browser_double_click/browser_scroll/browser_type_text. Do not use DOM element.click() as a substitute for clicking unless the user explicitly asks for DOM scripting.",
   "Use browser_capture_screenshot when the user asks what the page looks like or when pixel-level visual layout matters.",
 ].join("\n");
 
 const CODEX_BROWSER_USE_ROUTING_PROMPT = [
   "This DP Code turn is an in-app browser task.",
   "Use DP Code's native in-app browser tools in the dpcode_browser namespace to create or claim a tab, navigate pages, inspect the live browser state, click, type, screenshot, or read page metadata as needed.",
+  "When clicking or tapping, use the native coordinate tools such as dpcode_browser.browser_click or dpcode_browser.browser_tap after resolving the element's viewport bounds. Do not use DOM element.click() unless the user explicitly asks for DOM scripting.",
   "Do not use the bundled Browser Use skill, a Codex plugin, browser/SKILL.md, node_repl, mcp__node_repl__js, or direct browser-client.mjs imports for this app.",
   "Do not answer this task from web search results or generic source snippets. Report only what you verified through the in-app browser.",
 ].join("\n");

@@ -26,6 +26,9 @@ interface FakeBrowserManager {
   captureScreenshot: ReturnType<typeof vi.fn>;
   executeCdp: ReturnType<typeof vi.fn>;
   moveBrowserUseMouse: ReturnType<typeof vi.fn>;
+  clickBrowserUseMouse: ReturnType<typeof vi.fn>;
+  scrollBrowserUseMouse: ReturnType<typeof vi.fn>;
+  typeBrowserUseText: ReturnType<typeof vi.fn>;
   getBrowserUseSnapshot: () => { threadId: ThreadId; state: ThreadBrowserState } | null;
   newTab: (input: { threadId: ThreadId; url?: string; activate?: boolean }) => ThreadBrowserState;
   selectTab: (input: BrowserTabInput) => ThreadBrowserState;
@@ -199,6 +202,9 @@ function makeFakeBrowserManager(): FakeBrowserManager {
       params: input.params,
     })),
     moveBrowserUseMouse: vi.fn(async () => {}),
+    clickBrowserUseMouse: vi.fn(async () => {}),
+    scrollBrowserUseMouse: vi.fn(async () => {}),
+    typeBrowserUseText: vi.fn(async () => {}),
     getBrowserUseSnapshot: () => ({ threadId, state: manager.state }),
     newTab: (input) => {
       const tab = makeTab(`tab-${manager.state.tabs.length + 1}`, input.url ?? "about:blank", "");
@@ -336,7 +342,7 @@ describe("BrowserUsePipeServer", () => {
     }
   });
 
-  it("moves the native browser cursor and finalizes only tabs created by the session", async () => {
+  it("sends native browser input and finalizes only tabs created by the session", async () => {
     const { client, manager, server } = await startHarness();
     try {
       await client.request("getTabs", { session_id: "codex-session" });
@@ -356,6 +362,89 @@ describe("BrowserUsePipeServer", () => {
         tabId: "tab-3",
         x: 24.4,
         y: 48.6,
+      });
+
+      await expect(
+        client.request("click", {
+          session_id: "codex-session",
+          tabId: 3,
+          x: 40,
+          y: 50,
+          button: "right",
+          clickCount: 1,
+        }),
+      ).resolves.toEqual({});
+      expect(manager.clickBrowserUseMouse).toHaveBeenCalledWith({
+        threadId: manager.state.threadId,
+        tabId: "tab-3",
+        x: 40,
+        y: 50,
+        button: "right",
+        clickCount: 1,
+      });
+
+      await expect(
+        client.request("tap", {
+          session_id: "codex-session",
+          tabId: 3,
+          x: 44,
+          y: 54,
+        }),
+      ).resolves.toEqual({});
+      expect(manager.clickBrowserUseMouse).toHaveBeenLastCalledWith({
+        threadId: manager.state.threadId,
+        tabId: "tab-3",
+        x: 44,
+        y: 54,
+        button: "left",
+      });
+
+      await expect(
+        client.request("doubleClick", {
+          session_id: "codex-session",
+          tabId: 3,
+          x: 45,
+          y: 55,
+        }),
+      ).resolves.toEqual({});
+      expect(manager.clickBrowserUseMouse).toHaveBeenLastCalledWith({
+        threadId: manager.state.threadId,
+        tabId: "tab-3",
+        x: 45,
+        y: 55,
+        clickCount: 2,
+      });
+
+      await expect(
+        client.request("scroll", {
+          session_id: "codex-session",
+          tabId: 3,
+          x: 100,
+          y: 200,
+          deltaX: 0,
+          deltaY: 480,
+        }),
+      ).resolves.toEqual({});
+      expect(manager.scrollBrowserUseMouse).toHaveBeenCalledWith({
+        threadId: manager.state.threadId,
+        tabId: "tab-3",
+        x: 100,
+        y: 200,
+        deltaX: 0,
+        deltaY: 480,
+      });
+
+      await expect(
+        client.request("typeText", {
+          session_id: "codex-session",
+          tabId: 3,
+          text: "hello",
+        }),
+      ).resolves.toEqual({});
+      expect(manager.typeBrowserUseText).toHaveBeenCalledWith({
+        threadId: manager.state.threadId,
+        tabId: "tab-3",
+        text: "hello",
       });
 
       await expect(

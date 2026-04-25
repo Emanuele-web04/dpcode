@@ -112,6 +112,20 @@ const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
 const INLINE_MATH_HINT_REGEX = /[\\^_=+\-*/<>()[\]{}]/;
 const ALL_CAPS_DOLLAR_IDENTIFIER_REGEX = /^[A-Z][A-Z0-9_]{1,31}$/;
 
+function isSafeMarkdownImageSrc(value: string): boolean {
+  const trimmed = value.trim();
+  if (/^data:image\/(?:png|jpe?g|gif|webp|avif|bmp|svg\+xml);base64,/i.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith("blob:")) {
+    return true;
+  }
+  if (trimmed.startsWith("/attachments/")) {
+    return true;
+  }
+  return false;
+}
+
 function isLineStart(value: string, index: number): boolean {
   return index === 0 || value[index - 1] === "\n";
 }
@@ -518,7 +532,10 @@ function ChatMarkdown({
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const normalizedText = useMemo(() => protectLiteralMarkdownDollars(text), [text]);
-  const markdownUrlTransform = useCallback((href: string) => {
+  const markdownUrlTransform = useCallback((href: string, key?: string) => {
+    if (key === "src" && isSafeMarkdownImageSrc(href)) {
+      return href;
+    }
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
   const markdownComponents = useMemo<Components>(
@@ -543,6 +560,21 @@ function ChatMarkdown({
                 console.warn("Native API not found. Unable to open file in editor.");
               }
             }}
+          />
+        );
+      },
+      img({ node: _node, src, alt, ...props }) {
+        if (!src) {
+          return null;
+        }
+
+        return (
+          <img
+            {...props}
+            src={src}
+            alt={alt ?? ""}
+            loading="lazy"
+            className="my-2 block max-h-[520px] max-w-full rounded-lg border border-border/60 object-contain"
           />
         );
       },

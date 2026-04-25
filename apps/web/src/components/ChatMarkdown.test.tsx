@@ -88,6 +88,15 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
+  it("renders safe markdown image sources", async () => {
+    const dataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+    const markup = await renderMarkdown(`Here it is:\n\n![Browser screenshot](${dataUrl})`);
+
+    expect(markup).toContain("<img");
+    expect(markup).toContain(`src="${dataUrl}"`);
+    expect(markup).toContain('alt="Browser screenshot"');
+  });
+
   it("keeps plan and diff surfaces routed through the shared renderer", () => {
     const planSidebarSource = readFileSync(new URL("./PlanSidebar.tsx", import.meta.url), "utf8");
     const proposedPlanCardSource = readFileSync(

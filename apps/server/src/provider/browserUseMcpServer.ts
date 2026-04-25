@@ -56,7 +56,11 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function asTabId(value: unknown): number | undefined {
+function asMouseButton(value: unknown): "left" | "middle" | "right" | undefined {
+  return value === "left" || value === "middle" || value === "right" ? value : undefined;
+}
+
+function asPositiveInteger(value: unknown): number | undefined {
   const numeric =
     typeof value === "number"
       ? value
@@ -64,6 +68,10 @@ function asTabId(value: unknown): number | undefined {
         ? Number(value)
         : NaN;
   return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+function asTabId(value: unknown): number | undefined {
+  return asPositiveInteger(value);
 }
 
 function defaultSessionId(): string {
@@ -214,6 +222,11 @@ export function getBrowserUseToolDefinitions(): BrowserToolDefinition[] {
     minimum: 1,
     description: "Browser-use tab id from browser_list_tabs or browser_create_tab.",
   };
+  const viewportPointProperties = {
+    tabId: tabIdProperty,
+    x: { type: "number", description: "Viewport x coordinate in CSS pixels." },
+    y: { type: "number", description: "Viewport y coordinate in CSS pixels." },
+  };
 
   return [
     {
@@ -311,6 +324,104 @@ export function getBrowserUseToolDefinitions(): BrowserToolDefinition[] {
           ...(asTabId(args.tabId) ? { tabId: asTabId(args.tabId) } : {}),
           x: asNumber(args.x),
           y: asNumber(args.y),
+        }),
+    },
+    {
+      name: "browser_click",
+      description:
+        "Send a real native mouse click at viewport coordinates in the selected in-app browser tab. Use this instead of DOM element.click() when the user asks to click or tap.",
+      inputSchema: objectSchema(
+        {
+          ...viewportPointProperties,
+          button: {
+            type: "string",
+            enum: ["left", "middle", "right"],
+            description: "Mouse button. Defaults to left.",
+          },
+          clickCount: {
+            type: "integer",
+            minimum: 1,
+            description: "Number of clicks. Defaults to 1.",
+          },
+        },
+        ["x", "y"],
+      ),
+      call: (args) => {
+        const button = asMouseButton(args.button);
+        const clickCount = asPositiveInteger(args.clickCount);
+        return callBrowserUse("click", {
+          ...sessionParams(args),
+          ...(asTabId(args.tabId) ? { tabId: asTabId(args.tabId) } : {}),
+          x: asNumber(args.x),
+          y: asNumber(args.y),
+          ...(button ? { button } : {}),
+          ...(clickCount ? { clickCount } : {}),
+        });
+      },
+    },
+    {
+      name: "browser_tap",
+      description:
+        "Alias for a real left-button viewport click. Use for tap-like browser interaction, not DOM activation.",
+      inputSchema: objectSchema(viewportPointProperties, ["x", "y"]),
+      call: (args) =>
+        callBrowserUse("tap", {
+          ...sessionParams(args),
+          ...(asTabId(args.tabId) ? { tabId: asTabId(args.tabId) } : {}),
+          x: asNumber(args.x),
+          y: asNumber(args.y),
+        }),
+    },
+    {
+      name: "browser_double_click",
+      description: "Send a real native double-click at viewport coordinates.",
+      inputSchema: objectSchema(viewportPointProperties, ["x", "y"]),
+      call: (args) =>
+        callBrowserUse("doubleClick", {
+          ...sessionParams(args),
+          ...(asTabId(args.tabId) ? { tabId: asTabId(args.tabId) } : {}),
+          x: asNumber(args.x),
+          y: asNumber(args.y),
+        }),
+    },
+    {
+      name: "browser_scroll",
+      description:
+        "Send a real viewport wheel event from a coordinate. Positive deltaY scrolls down, negative deltaY scrolls up.",
+      inputSchema: objectSchema(
+        {
+          ...viewportPointProperties,
+          deltaX: { type: "number", description: "Horizontal wheel delta in CSS pixels." },
+          deltaY: { type: "number", description: "Vertical wheel delta in CSS pixels." },
+        },
+        ["x", "y", "deltaX", "deltaY"],
+      ),
+      call: (args) =>
+        callBrowserUse("scroll", {
+          ...sessionParams(args),
+          ...(asTabId(args.tabId) ? { tabId: asTabId(args.tabId) } : {}),
+          x: asNumber(args.x),
+          y: asNumber(args.y),
+          deltaX: asNumber(args.deltaX),
+          deltaY: asNumber(args.deltaY),
+        }),
+    },
+    {
+      name: "browser_type_text",
+      description:
+        "Insert text into the currently focused browser element. Focus the target first with browser_click.",
+      inputSchema: objectSchema(
+        {
+          tabId: tabIdProperty,
+          text: { type: "string" },
+        },
+        ["text"],
+      ),
+      call: (args) =>
+        callBrowserUse("typeText", {
+          ...sessionParams(args),
+          ...(asTabId(args.tabId) ? { tabId: asTabId(args.tabId) } : {}),
+          text: asString(args.text),
         }),
     },
     {

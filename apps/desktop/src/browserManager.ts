@@ -39,6 +39,8 @@ const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
 const BROWSER_THREAD_SUSPEND_DELAY_MS = 30_000;
 const BROWSER_ERROR_ABORTED = -3;
 const SEARCH_URL_PREFIX = "https://www.google.com/search?q=";
+const BROWSER_SCREENSHOT_MIN_CONTENT_BYTES = 12_000;
+const BROWSER_SCREENSHOT_RETRY_DELAYS_MS = [120, 300, 700] as const;
 
 type BrowserStateListener = (state: ThreadBrowserState) => void;
 
@@ -95,6 +97,26 @@ export interface BrowserUseCdpEvent {
 export interface BrowserUseMoveMouseInput extends BrowserTabInput {
   x: number;
   y: number;
+}
+
+export type BrowserUseMouseButton = "left" | "middle" | "right";
+
+export interface BrowserUseClickInput extends BrowserTabInput {
+  x: number;
+  y: number;
+  button?: BrowserUseMouseButton;
+  clickCount?: number;
+}
+
+export interface BrowserUseScrollInput extends BrowserTabInput {
+  x: number;
+  y: number;
+  deltaX: number;
+  deltaY: number;
+}
+
+export interface BrowserUseTypeTextInput extends BrowserTabInput {
+  text: string;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -735,7 +757,7 @@ export class DesktopBrowserManager {
       this.queueRuntimeStateSync(input.threadId, tab.id);
     }
 
-    const pngBytes = (await webContents.capturePage()).toPNG();
+    const pngBytes = await this.captureRenderedPagePng(webContents);
     if (pngBytes.byteLength === 0) {
       throw new Error("Couldn't capture a browser screenshot.");
     }
@@ -744,6 +766,75 @@ export class DesktopBrowserManager {
       name: screenshotFileNameForUrl(tab.lastCommittedUrl ?? tab.url),
       pngBytes,
     };
+  }
+
+  private async waitForBrowserPaint(webContents: WebContents): Promise<void> {
+    try {
+      this.attachDebugger(webContents);
+      await webContents.debugger.sendCommand("Runtime.evaluate", {
+        expression: `new Promise((resolve) => {
+          const done = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
+          if (document.readyState === "complete") {
+            done();
+          } else {
+            window.addEventListener("load", done, { once: true });
+            setTimeout(done, 1500);
+          }
+        })`,
+        awaitPromise: true,
+        returnByValue: true,
+        timeout: 2_000,
+      });
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  private async captureRenderedPagePng(webContents: WebContents): Promise<Buffer> {
+    let bestCapture: Buffer | null = null;
+    for (const delayMs of [0, ...BROWSER_SCREENSHOT_RETRY_DELAYS_MS]) {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      await this.waitForBrowserPaint(webContents);
+      const cdpCapture = await this.captureRenderedPagePngViaCdp(webContents);
+      if (cdpCapture.byteLength > (bestCapture?.byteLength ?? 0)) {
+        bestCapture = cdpCapture;
+      }
+      if (cdpCapture.byteLength >= BROWSER_SCREENSHOT_MIN_CONTENT_BYTES) {
+        return cdpCapture;
+      }
+    }
+    if (bestCapture && bestCapture.byteLength > 0) {
+      return bestCapture;
+    }
+    return (await webContents.capturePage()).toPNG();
+  }
+
+  private async captureRenderedPagePngViaCdp(webContents: WebContents): Promise<Buffer> {
+    let bestCapture: Buffer | null = null;
+    try {
+      this.attachDebugger(webContents);
+      for (const fromSurface of [true, false]) {
+        const result = (await webContents.debugger.sendCommand("Page.captureScreenshot", {
+          format: "png",
+          fromSurface,
+          captureBeyondViewport: false,
+        })) as { data?: unknown };
+        if (typeof result.data === "string" && result.data.length > 0) {
+          const capture = Buffer.from(result.data, "base64");
+          if (capture.byteLength > (bestCapture?.byteLength ?? 0)) {
+            bestCapture = capture;
+          }
+        }
+      }
+    } catch {
+      // Fall back to Electron's surface capture below.
+    }
+    if (bestCapture) {
+      return bestCapture;
+    }
+    return (await webContents.capturePage()).toPNG();
   }
 
   // Captures the current browser viewport as a PNG so the renderer can attach
@@ -817,8 +908,13 @@ export class DesktopBrowserManager {
     }
   }
 
-  // Sends a native mouse-move event into the tab viewport for browser-use cursor feedback.
-  async moveBrowserUseMouse(input: BrowserUseMoveMouseInput): Promise<void> {
+  private attachDebugger(webContents: WebContents): void {
+    if (!webContents.debugger.isAttached()) {
+      webContents.debugger.attach("1.3");
+    }
+  }
+
+  private async prepareBrowserUseRuntime(input: BrowserTabInput): Promise<LiveTabRuntime> {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
     if (state.activeTabId !== tab.id) {
@@ -841,12 +937,70 @@ export class DesktopBrowserManager {
       this.queueRuntimeStateSync(input.threadId, tab.id);
     }
 
+    runtime.webContents.focus();
+    return runtime;
+  }
+
+  // Sends a native mouse-move event into the tab viewport for browser-use cursor feedback.
+  async moveBrowserUseMouse(input: BrowserUseMoveMouseInput): Promise<void> {
+    const runtime = await this.prepareBrowserUseRuntime(input);
     runtime.webContents.sendInputEvent({
       type: "mouseMove",
       x: Math.max(0, Math.round(input.x)),
       y: Math.max(0, Math.round(input.y)),
       movementX: 0,
       movementY: 0,
+    });
+  }
+
+  // Dispatches real viewport mouse events into Chromium, matching Codex Browser Use's CUA path.
+  async clickBrowserUseMouse(input: BrowserUseClickInput): Promise<void> {
+    const runtime = await this.prepareBrowserUseRuntime(input);
+    const x = Math.max(0, Math.round(input.x));
+    const y = Math.max(0, Math.round(input.y));
+    const button = input.button ?? "left";
+    const clickCount = Math.max(1, Math.round(input.clickCount ?? 1));
+
+    this.attachDebugger(runtime.webContents);
+    await runtime.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x,
+      y,
+      button: "none",
+    });
+    await runtime.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button,
+      clickCount,
+    });
+    await runtime.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button,
+      clickCount,
+    });
+  }
+
+  async scrollBrowserUseMouse(input: BrowserUseScrollInput): Promise<void> {
+    const runtime = await this.prepareBrowserUseRuntime(input);
+    this.attachDebugger(runtime.webContents);
+    await runtime.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: Math.max(0, Math.round(input.x)),
+      y: Math.max(0, Math.round(input.y)),
+      deltaX: input.deltaX,
+      deltaY: input.deltaY,
+    });
+  }
+
+  async typeBrowserUseText(input: BrowserUseTypeTextInput): Promise<void> {
+    const runtime = await this.prepareBrowserUseRuntime(input);
+    this.attachDebugger(runtime.webContents);
+    await runtime.webContents.debugger.sendCommand("Input.insertText", {
+      text: input.text,
     });
   }
 

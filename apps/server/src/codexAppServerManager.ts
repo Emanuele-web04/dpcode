@@ -2401,6 +2401,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const namespace = this.readString(params, "namespace");
     const tool = this.readString(params, "tool");
     const args = this.readObject(params, "arguments") ?? {};
+    const route = this.readRouteFields(request.params);
+    const itemId = route.itemId ?? ProviderItemId.makeUnsafe(`dynamic_tool_${String(request.id)}`);
+    const turnId = route.turnId ?? context.session.activeTurnId;
 
     if (namespace !== DPCODE_BROWSER_USE_DYNAMIC_TOOL_NAMESPACE || !tool) {
       this.writeMessage(context, {
@@ -2417,6 +2420,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const result = await callBrowserUseTool(tool, {
         ...args,
         sessionId: `codex:${context.session.threadId}`,
+      });
+      this.emitDynamicBrowserToolResultEvent(context, {
+        itemId,
+        result,
+        success: true,
+        tool,
+        args,
+        ...(turnId ? { turnId } : {}),
       });
       const contentItems = isBrowserUseScreenshotResult(result)
         ? [
@@ -2443,19 +2454,66 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         },
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitDynamicBrowserToolResultEvent(context, {
+        itemId,
+        result: { error: message },
+        success: false,
+        tool,
+        args,
+        ...(turnId ? { turnId } : {}),
+      });
       this.writeMessage(context, {
         id: request.id,
         result: {
           contentItems: [
             {
               type: "inputText",
-              text: error instanceof Error ? error.message : String(error),
+              text: message,
             },
           ],
           success: false,
         },
       });
     }
+  }
+
+  private emitDynamicBrowserToolResultEvent(
+    context: CodexSessionContext,
+    input: {
+      readonly itemId: ProviderItemId;
+      readonly turnId?: TurnId;
+      readonly tool: string;
+      readonly args: Record<string, unknown>;
+      readonly result: unknown;
+      readonly success: boolean;
+    },
+  ): void {
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      method: "item/completed",
+      ...(input.turnId ? { turnId: input.turnId } : {}),
+      itemId: input.itemId,
+      payload: {
+        item: {
+          type: "dynamicToolCall",
+          id: input.itemId,
+          toolName: input.tool,
+          title: input.success
+            ? `Completed ${input.tool}`
+            : `Failed ${input.tool}`,
+          input: input.args,
+          result: input.result,
+        },
+        toolName: input.tool,
+        input: input.args,
+        result: input.result,
+      },
+    });
   }
 
   private handleResponse(context: CodexSessionContext, response: JsonRpcResponse): void {

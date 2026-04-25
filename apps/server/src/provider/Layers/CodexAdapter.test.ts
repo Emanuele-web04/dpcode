@@ -470,6 +470,62 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps completed dynamic browser screenshot tools with image payloads", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-browser-screenshot-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("dynamic_tool_1"),
+        payload: {
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic_tool_1",
+            toolName: "browser_capture_screenshot",
+            result: {
+              name: "browser.png",
+              mimeType: "image/png",
+              sizeBytes: 4,
+              data: "AQIDBA==",
+            },
+          },
+          toolName: "browser_capture_screenshot",
+          result: {
+            name: "browser.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+            data: "AQIDBA==",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "dynamic_tool_call");
+      assert.deepEqual((firstEvent.value.payload.data as { result?: unknown }).result, {
+        name: "browser.png",
+        mimeType: "image/png",
+        sizeBytes: 4,
+        data: "AQIDBA==",
+      });
+    }),
+  );
+
   it.effect("maps plan deltas to canonical proposed-plan delta events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

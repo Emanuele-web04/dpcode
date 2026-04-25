@@ -442,6 +442,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={appTypographyScale.uiSmPx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                    onImageExpand={onImageExpand}
+                    onTimelineImageLoad={onTimelineImageLoad}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
                 ))}
@@ -640,6 +642,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const assistantImages = (row.message.attachments ?? []).filter(
+            (
+              attachment,
+            ): attachment is Extract<
+              NonNullable<TimelineMessage["attachments"]>[number],
+              { type: "image" }
+            > => attachment.type === "image",
+          );
           const inlineToolEntries = hasOnlyToolToneEntries(row.inlineWorkEntries)
             ? row.inlineWorkEntries
             : [];
@@ -748,6 +758,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={chatTypographyStyle}
                   />
                 </div>
+                {assistantImages.length > 0 && (
+                  <div className="mt-2.5 flex max-w-[560px] flex-col gap-2">
+                    {assistantImages.map((image) => (
+                      <AssistantImageAttachmentPreview
+                        key={image.id}
+                        image={image}
+                        assistantImages={assistantImages}
+                        onImageExpand={onImageExpand}
+                        onTimelineImageLoad={onTimelineImageLoad}
+                      />
+                    ))}
+                  </div>
+                )}
                 {visibleRenderableInlineToolEntries.length > 0 && (
                   <div className="mt-2.5">
                     <div className="space-y-px">
@@ -760,6 +783,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           density="compact"
                           fileDiffStatByPath={fileDiffStatByPath}
                           onOpenTurnDiff={onOpenTurnDiff}
+                          onImageExpand={onImageExpand}
+                          onTimelineImageLoad={onTimelineImageLoad}
                           {...(onOpenThread ? { onOpenThread } : {})}
                           {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
                         />
@@ -1207,6 +1232,45 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
             theme={props.resolvedTheme}
             className="size-4 opacity-70"
           />
+        </div>
+      )}
+    </button>
+  );
+});
+
+const AssistantImageAttachmentPreview = memo(function AssistantImageAttachmentPreview(props: {
+  image: Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>;
+  assistantImages: Array<
+    Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>
+  >;
+  onImageExpand: (preview: ExpandedImagePreview) => void;
+  onTimelineImageLoad: () => void;
+}) {
+  const handleClick = () => {
+    const preview = buildExpandedImagePreview(props.assistantImages, props.image.id);
+    if (!preview) return;
+    props.onImageExpand(preview);
+  };
+
+  return (
+    <button
+      type="button"
+      className="block max-w-full overflow-hidden rounded-lg border border-border/60 bg-background/75 p-1 text-left shadow-[0_1px_0_rgba(255,255,255,0.04)_inset] transition-colors hover:bg-background/90"
+      aria-label={`Preview ${props.image.name}`}
+      title={props.image.name}
+      onClick={handleClick}
+    >
+      {props.image.previewUrl ? (
+        <img
+          src={props.image.previewUrl}
+          alt={props.image.name}
+          className="block max-h-[420px] w-full object-contain"
+          onLoad={props.onTimelineImageLoad}
+          onError={props.onTimelineImageLoad}
+        />
+      ) : (
+        <div className="flex h-24 w-full items-center justify-center text-muted-foreground/65">
+          {props.image.name}
         </div>
       )}
     </button>
@@ -1791,6 +1855,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  onImageExpand?: (preview: ExpandedImagePreview) => void;
+  onTimelineImageLoad?: () => void;
 }) {
   const {
     workEntry,
@@ -1801,6 +1867,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     turnId,
     onOpenTurnDiff,
     onOpenThread,
+    onImageExpand,
+    onTimelineImageLoad,
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
@@ -1828,6 +1896,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   );
   const subagentSummary = subagentCardSummary(workEntry);
   const subagentMeta = subagentCardMeta(workEntry);
+  const imagePreview = workEntry.imagePreview;
 
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
@@ -2108,20 +2177,78 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </div>
           );
 
-          if (!workEntry.command) {
-            return rowContent;
-          }
-
-          return (
+          const rowWithTooltip = workEntry.command ? (
             <Tooltip>
               <TooltipTrigger render={rowContent} />
               <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
                 {commandTooltipContent(workEntry.command, displayText)}
               </TooltipPopup>
             </Tooltip>
+          ) : (
+            rowContent
+          );
+
+          if (!imagePreview) {
+            return rowWithTooltip;
+          }
+
+          return (
+            <div className={cn("space-y-1.5", compact ? "pl-5" : "pl-7")}>
+              {rowWithTooltip}
+              <WorkEntryImagePreview
+                image={imagePreview}
+                onImageExpand={onImageExpand}
+                onTimelineImageLoad={onTimelineImageLoad}
+              />
+            </div>
           );
         })()
       )}
+    </div>
+  );
+});
+
+const WorkEntryImagePreview = memo(function WorkEntryImagePreview(props: {
+  image: NonNullable<TimelineWorkEntry["imagePreview"]>;
+  onImageExpand?: (preview: ExpandedImagePreview) => void;
+  onTimelineImageLoad?: () => void;
+}) {
+  const handleClick = () => {
+    if (!props.onImageExpand) {
+      return;
+    }
+    const preview = buildExpandedImagePreview([props.image], props.image.id);
+    if (preview) {
+      props.onImageExpand(preview);
+    }
+  };
+
+  const image = (
+    <img
+      src={props.image.previewUrl}
+      alt={props.image.name}
+      className="block max-h-[360px] w-full rounded-lg object-contain"
+      onLoad={props.onTimelineImageLoad}
+      onError={props.onTimelineImageLoad}
+    />
+  );
+
+  return props.onImageExpand ? (
+    <button
+      type="button"
+      className="block max-w-[360px] overflow-hidden rounded-lg border border-border/55 bg-background/70 p-1 text-left shadow-[0_1px_0_rgba(255,255,255,0.04)_inset] transition-colors hover:bg-background/85"
+      aria-label={`Preview ${props.image.name}`}
+      title={props.image.name}
+      onClick={handleClick}
+    >
+      {image}
+    </button>
+  ) : (
+    <div
+      className="max-w-[360px] overflow-hidden rounded-lg border border-border/55 bg-background/70 p-1"
+      title={props.image.name}
+    >
+      {image}
     </div>
   );
 });
