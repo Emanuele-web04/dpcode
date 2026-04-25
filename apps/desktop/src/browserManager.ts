@@ -8,13 +8,14 @@ import * as Crypto from "node:crypto";
 import {
   BrowserWindow,
   clipboard,
+  Menu,
   nativeImage,
   session,
   shell,
   webContents as electronWebContents,
   WebContentsView,
 } from "electron";
-import type { WebContents } from "electron";
+import type { ContextMenuParams, MenuItemConstructorOptions, WebContents } from "electron";
 import type {
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
@@ -41,6 +42,12 @@ const BROWSER_ERROR_ABORTED = -3;
 const SEARCH_URL_PREFIX = "https://www.google.com/search?q=";
 const BROWSER_SCREENSHOT_MIN_CONTENT_BYTES = 12_000;
 const BROWSER_SCREENSHOT_RETRY_DELAYS_MS = [120, 300, 700] as const;
+const BROWSER_ZOOM_STEP = 0.1;
+const BROWSER_MIN_ZOOM_FACTOR = 0.25;
+const BROWSER_MAX_ZOOM_FACTOR = 5;
+const APP_ZOOM_STEP = 0.1;
+const APP_MIN_ZOOM_FACTOR = 0.5;
+const APP_MAX_ZOOM_FACTOR = 3;
 
 type BrowserStateListener = (state: ThreadBrowserState) => void;
 
@@ -61,6 +68,14 @@ interface PendingRuntimeSync {
   threadId: ThreadId;
   tabId: string;
   faviconUrls?: string[];
+}
+
+interface BrowserKeyboardInput {
+  type?: string;
+  key?: string;
+  control?: boolean;
+  meta?: boolean;
+  alt?: boolean;
 }
 
 const LIVE_TAB_STATUS: BrowserTabState["status"] = "live";
@@ -286,6 +301,31 @@ function browserBoundsSignature(bounds: BrowserPanelBounds | null): string {
   }
 
   return `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
+}
+
+function resolveAppZoomShortcut(input: BrowserKeyboardInput): number | "reset" | null {
+  if (input.type !== "keyDown" || input.alt === true) {
+    return null;
+  }
+
+  const usesPrimaryModifier =
+    process.platform === "darwin" ? input.meta === true : input.control === true;
+  if (!usesPrimaryModifier) {
+    return null;
+  }
+
+  switch (input.key) {
+    case "0":
+      return "reset";
+    case "=":
+    case "+":
+      return APP_ZOOM_STEP;
+    case "-":
+    case "_":
+      return -APP_ZOOM_STEP;
+    default:
+      return null;
+  }
 }
 
 export class DesktopBrowserManager {
@@ -726,6 +766,27 @@ export class DesktopBrowserManager {
     runtime.webContents.openDevTools({ mode: "detach" });
   }
 
+  zoomAppWindow(delta: number): boolean {
+    if (!this.window || this.window.isDestroyed()) {
+      return false;
+    }
+    const webContents = this.window.webContents;
+    const next = Math.min(
+      APP_MAX_ZOOM_FACTOR,
+      Math.max(APP_MIN_ZOOM_FACTOR, webContents.getZoomFactor() + delta),
+    );
+    webContents.setZoomFactor(next);
+    return true;
+  }
+
+  resetAppWindowZoom(): boolean {
+    if (!this.window || this.window.isDestroyed()) {
+      return false;
+    }
+    this.window.webContents.setZoomFactor(1);
+    return true;
+  }
+
   // Ensures the requested tab is active/live, then returns a fresh PNG capture
   // from the native browser surface for whichever destination needs it next.
   private async captureScreenshotPng(input: BrowserTabInput): Promise<{
@@ -815,11 +876,13 @@ export class DesktopBrowserManager {
     let bestCapture: Buffer | null = null;
     try {
       this.attachDebugger(webContents);
+      const visibleViewportClip = await this.resolveVisibleViewportScreenshotClip(webContents);
       for (const fromSurface of [true, false]) {
         const result = (await webContents.debugger.sendCommand("Page.captureScreenshot", {
           format: "png",
           fromSurface,
           captureBeyondViewport: false,
+          ...(visibleViewportClip ? { clip: visibleViewportClip } : {}),
         })) as { data?: unknown };
         if (typeof result.data === "string" && result.data.length > 0) {
           const capture = Buffer.from(result.data, "base64");
@@ -835,6 +898,59 @@ export class DesktopBrowserManager {
       return bestCapture;
     }
     return (await webContents.capturePage()).toPNG();
+  }
+
+  private async resolveVisibleViewportScreenshotClip(
+    webContents: WebContents,
+  ): Promise<{ x: number; y: number; width: number; height: number; scale: number } | null> {
+    try {
+      this.attachDebugger(webContents);
+      const metrics = (await webContents.debugger.sendCommand("Page.getLayoutMetrics")) as {
+        cssVisualViewport?: {
+          pageX?: unknown;
+          pageY?: unknown;
+          clientWidth?: unknown;
+          clientHeight?: unknown;
+        };
+      };
+      const viewport = metrics.cssVisualViewport;
+      if (!viewport) {
+        return null;
+      }
+      const x = Number(viewport.pageX);
+      const y = Number(viewport.pageY);
+      const width = Number(viewport.clientWidth);
+      const height = Number(viewport.clientHeight);
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+        return null;
+      }
+      return {
+        x,
+        y,
+        width,
+        height,
+        scale: await this.resolveScreenshotScale(webContents),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveScreenshotScale(webContents: WebContents): Promise<number> {
+    try {
+      this.attachDebugger(webContents);
+      const result = (await webContents.debugger.sendCommand("Runtime.evaluate", {
+        expression: "window.devicePixelRatio",
+        returnByValue: true,
+      })) as { result?: { value?: unknown } };
+      const devicePixelRatio = Number(result.result?.value);
+      if (Number.isFinite(devicePixelRatio) && devicePixelRatio > 0) {
+        return 1 / devicePixelRatio;
+      }
+    } catch {
+      // The default CDP scale is acceptable if the page blocks evaluation.
+    }
+    return 1;
   }
 
   // Captures the current browser viewport as a PNG so the renderer can attach
@@ -1402,6 +1518,9 @@ export class DesktopBrowserManager {
   private configureRuntimeWebContents(runtime: LiveTabRuntime): void {
     const { threadId, tabId, webContents } = runtime;
 
+    this.installRuntimeContextMenu(runtime);
+    this.installRuntimeShortcutRouting(runtime);
+
     webContents.setWindowOpenHandler(({ url }) => {
       if (url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL) {
         this.newTab({
@@ -1478,6 +1597,123 @@ export class DesktopBrowserManager {
         this.attachActiveTab(threadId, bounds);
       }
     });
+  }
+
+  private installRuntimeContextMenu(runtime: LiveTabRuntime): void {
+    const { webContents } = runtime;
+    webContents.on("context-menu", (_event, params) => {
+      const menu = Menu.buildFromTemplate(this.buildRuntimeContextMenu(runtime, params));
+      menu.popup({
+        window: this.window ?? BrowserWindow.getFocusedWindow() ?? undefined,
+      });
+    });
+  }
+
+  private installRuntimeShortcutRouting(runtime: LiveTabRuntime): void {
+    runtime.webContents.on("before-input-event", (event, input) => {
+      const zoomShortcut = resolveAppZoomShortcut(input);
+      if (zoomShortcut === null) {
+        return;
+      }
+
+      event.preventDefault();
+      if (zoomShortcut === "reset") {
+        this.resetAppWindowZoom();
+        return;
+      }
+      this.zoomAppWindow(zoomShortcut);
+    });
+  }
+
+  private buildRuntimeContextMenu(
+    runtime: LiveTabRuntime,
+    params: ContextMenuParams,
+  ): MenuItemConstructorOptions[] {
+    const { webContents } = runtime;
+    const template: MenuItemConstructorOptions[] = [];
+
+    if (params.isEditable) {
+      template.push(
+        { label: "Undo", role: "undo", enabled: params.editFlags.canUndo },
+        { label: "Redo", role: "redo", enabled: params.editFlags.canRedo },
+        { type: "separator" },
+        { label: "Cut", role: "cut", enabled: params.editFlags.canCut },
+        { label: "Copy", role: "copy", enabled: params.editFlags.canCopy },
+        { label: "Paste", role: "paste", enabled: params.editFlags.canPaste },
+        { type: "separator" },
+        { label: "Select All", role: "selectAll", enabled: params.editFlags.canSelectAll },
+        { type: "separator" },
+      );
+    } else if (params.selectionText.trim().length > 0) {
+      template.push(
+        { label: "Copy", role: "copy", enabled: params.editFlags.canCopy },
+        { type: "separator" },
+      );
+    }
+
+    template.push(
+      {
+        label: "Back",
+        enabled: webContents.canGoBack(),
+        click: () => {
+          webContents.goBack();
+          this.queueRuntimeStateSync(runtime.threadId, runtime.tabId);
+        },
+      },
+      {
+        label: "Forward",
+        enabled: webContents.canGoForward(),
+        click: () => {
+          webContents.goForward();
+          this.queueRuntimeStateSync(runtime.threadId, runtime.tabId);
+        },
+      },
+      {
+        label: "Reload",
+        click: () => {
+          webContents.reload();
+          this.queueRuntimeStateSync(runtime.threadId, runtime.tabId);
+        },
+      },
+      { type: "separator" },
+      {
+        label: "Zoom In",
+        click: () => {
+          this.adjustRuntimeZoom(runtime, BROWSER_ZOOM_STEP);
+        },
+      },
+      {
+        label: "Zoom Out",
+        click: () => {
+          this.adjustRuntimeZoom(runtime, -BROWSER_ZOOM_STEP);
+        },
+      },
+      {
+        label: "Reset Zoom",
+        enabled: Math.abs(webContents.getZoomFactor() - 1) > 0.001,
+        click: () => {
+          webContents.setZoomFactor(1);
+        },
+      },
+      { type: "separator" },
+      {
+        label: "Inspect",
+        click: () => {
+          webContents.inspectElement(params.x, params.y);
+        },
+      },
+    );
+
+    return template;
+  }
+
+  private adjustRuntimeZoom(runtime: LiveTabRuntime, delta: number): void {
+    const current = runtime.webContents.getZoomFactor();
+    const next = Math.min(
+      BROWSER_MAX_ZOOM_FACTOR,
+      Math.max(BROWSER_MIN_ZOOM_FACTOR, current + delta),
+    );
+    runtime.webContents.setZoomFactor(next);
   }
 
   private async loadTab(

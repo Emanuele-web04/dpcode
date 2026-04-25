@@ -833,10 +833,59 @@ function configureApplicationMenu(): void {
         { role: "forceReload" },
         { role: "toggleDevTools" },
         { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn", accelerator: "CmdOrCtrl+=" },
-        { role: "zoomIn", accelerator: "CmdOrCtrl+Plus", visible: false },
-        { role: "zoomOut" },
+        {
+          label: "Actual Size",
+          accelerator: "CmdOrCtrl+0",
+          click: (_menuItem, focusedWindow) => {
+            if (browserManager.resetAppWindowZoom()) {
+              return;
+            }
+            focusedWindow?.webContents.setZoomFactor(1);
+          },
+        },
+        {
+          label: "Zoom In",
+          accelerator: "CmdOrCtrl+=",
+          click: (_menuItem, focusedWindow) => {
+            if (browserManager.zoomAppWindow(0.1)) {
+              return;
+            }
+            if (focusedWindow) {
+              focusedWindow.webContents.setZoomFactor(
+                focusedWindow.webContents.getZoomFactor() + 0.1,
+              );
+            }
+          },
+        },
+        {
+          label: "Zoom In",
+          accelerator: "CmdOrCtrl+Plus",
+          visible: false,
+          click: (_menuItem, focusedWindow) => {
+            if (browserManager.zoomAppWindow(0.1)) {
+              return;
+            }
+            if (focusedWindow) {
+              focusedWindow.webContents.setZoomFactor(
+                focusedWindow.webContents.getZoomFactor() + 0.1,
+              );
+            }
+          },
+        },
+        {
+          label: "Zoom Out",
+          accelerator: "CmdOrCtrl+-",
+          click: (_menuItem, focusedWindow) => {
+            if (browserManager.zoomAppWindow(-0.1)) {
+              return;
+            }
+            if (focusedWindow) {
+              focusedWindow.webContents.setZoomFactor(
+                focusedWindow.webContents.getZoomFactor() - 0.1,
+              );
+            }
+          },
+        },
         { type: "separator" },
         { role: "togglefullscreen" },
       ],

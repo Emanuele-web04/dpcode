@@ -13,6 +13,7 @@ import {
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  BugIcon,
   CameraIcon,
   CopyIcon,
   ExternalLinkIcon,
@@ -133,6 +134,17 @@ function ignoreBrowserBoundsSyncError(): void {
   // Bounds sync is best-effort plumbing between the React shell and the native
   // browser surface. Avoid surfacing transient geometry-sync failures as user-facing
   // browser errors because they do not reflect page navigation health.
+}
+
+function setBrowserWebviewOverlayOcclusion(
+  webview: BrowserWebviewElement | null,
+  occluded: boolean,
+): void {
+  if (!webview) {
+    return;
+  }
+  webview.style.visibility = occluded ? "hidden" : "visible";
+  webview.style.pointerEvents = occluded ? "none" : "auto";
 }
 
 function isVisibleOverlayElement(element: HTMLElement): boolean {
@@ -547,6 +559,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       perfCountersRef.current.syncAttempts += 1;
       const obscuredByOverlay = hasNativeBrowserObscuringOverlay(element);
       lastOverlayObscuredRef.current = obscuredByOverlay;
+      setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const bounds = obscuredByOverlay
         ? null
         : (() => {
@@ -682,6 +695,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     document.addEventListener("transitioncancel", handleTransitionBounds, true);
 
     return () => {
+      setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, false);
       observer.disconnect();
       overlayObserver.disconnect();
       window.removeEventListener("resize", scheduleSyncBounds);
@@ -1038,6 +1052,22 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         >
           <CopyIcon className="size-3.5" />
           <span className="sr-only">Copy browser screenshot to clipboard</span>
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          disabled={!activeTab}
+          onClick={() => {
+            if (!api || !activeTab) return;
+            void runBrowserAction(async () => {
+              await api.browser.openDevTools({ threadId, tabId: activeTab.id });
+            });
+          }}
+        >
+          <BugIcon className="size-3.5" />
+          <span className="sr-only">Inspect browser tab</span>
         </Button>
         <Button
           type="button"
