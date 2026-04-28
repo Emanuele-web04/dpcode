@@ -168,6 +168,11 @@ function createFakePiRuntime() {
   };
 
   return {
+    emit: (event: FakePiEvent) => {
+      for (const listener of listeners) {
+        listener(event);
+      }
+    },
     modelRegistry,
     runtime,
     session,
@@ -300,6 +305,64 @@ describe("PiAdapter", () => {
         },
       },
     });
+  });
+
+  it("returns after Pi accepts a prompt instead of waiting for agent completion", async () => {
+    const fake = createFakePiRuntime();
+    let resolvePrompt: (() => void) | undefined;
+    fake.session.prompt.mockImplementation(async (_text, options) => {
+      options?.preflightResult?.(true);
+      await new Promise<void>((resolve) => {
+        resolvePrompt = resolve;
+      });
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* PiAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "pi",
+          threadId: asThreadId("thread-pi-long-running"),
+          runtimeMode: "full-access",
+          modelSelection: {
+            provider: "pi",
+            model: "openai/gpt-5",
+          },
+        });
+        const turn = yield* adapter.sendTurn({
+          threadId: asThreadId("thread-pi-long-running"),
+          input: "keep working",
+          attachments: [],
+          interactionMode: "default",
+        });
+        const runningSession = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === asThreadId("thread-pi-long-running"),
+        );
+
+        fake.emit({ type: "agent_end" });
+        resolvePrompt?.();
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        return { collected, runningSession, turn };
+      }).pipe(Effect.provide(providePiAdapter(fake.runtime))),
+    );
+
+    expect(result.turn.turnId).toMatch(/^pi-turn-/u);
+    expect(result.runningSession).toMatchObject({
+      status: "running",
+      activeTurnId: result.turn.turnId,
+    });
+    expect(result.collected.map((event: ProviderRuntimeEvent) => event.type)).toEqual([
+      "session.started",
+      "session.configured",
+      "thread.started",
+      "turn.started",
+      "thread.token-usage.updated",
+      "turn.completed",
+    ]);
   });
 
   it("emits configured Pi context window but skips unknown post-compaction usage", async () => {

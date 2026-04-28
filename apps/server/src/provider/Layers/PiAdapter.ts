@@ -22,7 +22,7 @@ import {
   type ToolLifecycleItemType,
   TurnId,
 } from "@t3tools/contracts";
-import { Effect, Layer, Queue, Stream } from "effect";
+import { Deferred, Effect, Exit, Layer, Queue, Scope, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -132,6 +132,7 @@ interface PiAgentSessionLike {
     text: string,
     options?: {
       readonly images?: ReadonlyArray<{ type: "image"; data: string; mimeType: string }>;
+      readonly preflightResult?: (success: boolean) => void;
     },
   ) => Promise<void>;
   readonly abort: () => Promise<void>;
@@ -189,6 +190,7 @@ interface PiSessionStatsLike {
 interface PiSessionContext {
   session: ProviderSession;
   readonly piSession: PiAgentSessionLike;
+  readonly sessionScope: Scope.Scope;
   unsubscribe: (() => void) | null;
   activeTurnId: TurnId | undefined;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
@@ -915,7 +917,53 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
         context.unsubscribe?.();
         context.unsubscribe = null;
         yield* Effect.promise(() => context.piSession.abort()).pipe(Effect.ignore);
+        yield* Scope.close(context.sessionScope, Exit.void).pipe(Effect.ignore);
         yield* Effect.sync(() => context.piSession.dispose()).pipe(Effect.ignore);
+      });
+
+      const failActivePiTurn = Effect.fn("failActivePiTurn")(function* (input: {
+        readonly context: PiSessionContext;
+        readonly turnId: TurnId;
+        readonly detail: string;
+        readonly cause?: unknown;
+      }) {
+        if (input.context.stopped || input.context.activeTurnId !== input.turnId) {
+          return;
+        }
+        input.context.activeTurnId = undefined;
+        input.context.activeToolCalls.clear();
+        updateProviderSession(
+          input.context,
+          {
+            status: "ready",
+            lastError: input.detail,
+          },
+          { clearActiveTurnId: true },
+        );
+        yield* emit({
+          ...buildEventBase({
+            threadId: input.context.session.threadId,
+            turnId: input.turnId,
+          }),
+          type: "turn.aborted",
+          payload: {
+            reason: input.detail,
+          },
+        });
+        if (input.cause !== undefined) {
+          yield* emit({
+            ...buildEventBase({
+              threadId: input.context.session.threadId,
+              turnId: input.turnId,
+              raw: input.cause,
+            }),
+            type: "runtime.error",
+            payload: {
+              message: input.detail,
+              data: input.cause,
+            },
+          });
+        }
       });
 
       const handlePiEvent = Effect.fn("handlePiEvent")(function* (
@@ -1201,6 +1249,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
 
           const createdAt = nowIso();
           const sessionFile = piSession.sessionManager.getSessionFile();
+          const sessionScope = yield* Scope.make();
           const session: ProviderSession = {
             provider: PROVIDER,
             status: "ready",
@@ -1215,6 +1264,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           const context: PiSessionContext = {
             session,
             piSession,
+            sessionScope,
             unsubscribe: null,
             activeTurnId: undefined,
             turns: [],
@@ -1375,7 +1425,27 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           },
         });
 
-        yield* Effect.promise(() => context.piSession.prompt(text, { images })).pipe(
+        const promptAccepted = yield* Deferred.make<void, ProviderAdapterRequestError>();
+        const acceptPrompt = (accepted: boolean) => {
+          const result = accepted
+            ? Deferred.succeed(promptAccepted, undefined)
+            : Deferred.fail(
+                promptAccepted,
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "prompt",
+                  detail: "Pi rejected the prompt before dispatch.",
+                }),
+              );
+          Effect.runFork(result.pipe(Effect.ignore));
+        };
+        yield* Effect.promise(() =>
+          context.piSession.prompt(text, {
+            images,
+            preflightResult: acceptPrompt,
+          }),
+        ).pipe(
+          Effect.tap(() => Deferred.succeed(promptAccepted, undefined)),
           Effect.mapError(
             (cause) =>
               new ProviderAdapterRequestError({
@@ -1386,23 +1456,28 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
               }),
           ),
           Effect.tapError((requestError) =>
-            Effect.gen(function* () {
-              context.activeTurnId = undefined;
-              updateProviderSession(
-                context,
-                {
-                  status: "ready",
-                  lastError: requestError.detail,
-                },
-                { clearActiveTurnId: true },
-              );
-              yield* emit({
-                ...buildEventBase({ threadId: input.threadId, turnId }),
-                type: "turn.aborted",
-                payload: {
-                  reason: requestError.detail,
-                },
-              });
+            Deferred.fail(promptAccepted, requestError).pipe(
+              Effect.zipRight(
+                failActivePiTurn({
+                  context,
+                  turnId,
+                  detail: requestError.detail,
+                  cause: requestError.cause,
+                }),
+              ),
+              Effect.ignore,
+            ),
+          ),
+          Effect.forkIn(context.sessionScope),
+        );
+
+        yield* Deferred.await(promptAccepted).pipe(
+          Effect.tapError((requestError) =>
+            failActivePiTurn({
+              context,
+              turnId,
+              detail: requestError.detail,
+              cause: requestError.cause,
             }),
           ),
         );
