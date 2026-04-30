@@ -37,6 +37,7 @@ import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 
 const PROVIDER = "pi" as const;
 const DEFAULT_PI_MODEL = "openai/gpt-5";
+const RUNTIME_EVENT_QUEUE_CAPACITY = 10_000;
 const PI_THINKING_LEVELS = new Set<PiThinkingLevel>([
   "off",
   "minimal",
@@ -121,6 +122,8 @@ interface PiAgentSessionLike {
   readonly state?: {
     readonly messages?: unknown[];
   };
+  readonly isStreaming?: boolean;
+  readonly isRetrying?: boolean;
   readonly modelRegistry?: PiModelRegistryLike;
   readonly resourceLoader?: PiResourceLoaderLike;
   readonly promptTemplates?: ReadonlyArray<PiPromptTemplateLike>;
@@ -167,6 +170,7 @@ interface PiTrackedToolCall {
   readonly id: string;
   readonly toolName: string;
   readonly itemType: ToolLifecycleItemType;
+  readonly startedAt: string;
   readonly args?: unknown;
 }
 
@@ -191,15 +195,24 @@ interface PiSessionContext {
   session: ProviderSession;
   readonly piSession: PiAgentSessionLike;
   readonly sessionScope: Scope.Scope;
+  readonly sessionGeneration: number;
   unsubscribe: (() => void) | null;
   eventProcessing: Promise<void>;
   activeTurnId: TurnId | undefined;
+  activeTurnGeneration: number;
   activeTurnStarted: boolean;
-  turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  activeAssistantTextEmitted: boolean;
+  activeTurnMessageStartIndex: number;
   activeToolCalls: Map<string, PiTrackedToolCall>;
   lastEmittedContextWindowKey: string | undefined;
   lastEmittedTokenUsageKey: string | undefined;
   stopped: boolean;
+}
+
+interface PiEventDispatchContext {
+  readonly sessionGeneration: number;
+  readonly turnId?: TurnId | undefined;
+  readonly turnGeneration: number;
 }
 
 function nowIso(): string {
@@ -355,6 +368,7 @@ function buildEventBase(input: {
   readonly threadId: ThreadId;
   readonly turnId?: TurnId | undefined;
   readonly itemId?: string | undefined;
+  readonly createdAt?: string | undefined;
   readonly raw?: unknown;
 }): Pick<
   ProviderRuntimeEvent,
@@ -364,7 +378,7 @@ function buildEventBase(input: {
     eventId: EventId.makeUnsafe(randomUUID()),
     provider: PROVIDER,
     threadId: input.threadId,
-    createdAt: nowIso(),
+    createdAt: input.createdAt ?? nowIso(),
     ...(input.turnId ? { turnId: input.turnId } : {}),
     ...(input.itemId ? { itemId: toRuntimeItemId(input.itemId) } : {}),
     ...(input.raw !== undefined
@@ -497,7 +511,11 @@ function piToolPath(args: unknown): string | undefined {
 }
 
 function piToolPattern(args: unknown): string | undefined {
-  return firstTrimmedString(asRecord(args), ["pattern", "query", "glob"]);
+  return firstTrimmedString(asRecord(args), ["pattern", "query"]);
+}
+
+function piToolGlob(args: unknown): string | undefined {
+  return firstTrimmedString(asRecord(args), ["glob"]);
 }
 
 function piToolCommand(args: unknown): string | undefined {
@@ -514,14 +532,15 @@ function piToolDisplayTitle(toolName: string, args: unknown): string {
     case "ls":
       return path ? `List ${truncatePiToolTitlePart(path)}` : "List";
     case "grep": {
-      const target = path ?? firstTrimmedString(asRecord(args), ["glob"]);
+      const glob = piToolGlob(args);
+      const target = path ?? glob;
       if (pattern && target) {
         return `Search ${truncatePiToolTitlePart(pattern)} in ${truncatePiToolTitlePart(target)}`;
       }
       if (pattern) {
         return `Search ${truncatePiToolTitlePart(pattern)}`;
       }
-      return target ? `Search ${truncatePiToolTitlePart(target)}` : "Search";
+      return glob ? `Search files matching ${truncatePiToolTitlePart(glob)}` : "Search";
     }
     case "find": {
       if (pattern && path) {
@@ -643,24 +662,180 @@ function detailFromUnknown(value: unknown): string | undefined {
   }
 }
 
-function resolveTurnSnapshot(
-  context: PiSessionContext,
-  turnId: TurnId,
-): { id: TurnId; items: Array<unknown> } {
-  const existing = context.turns.find((turn) => turn.id === turnId);
-  if (existing) {
-    return existing;
-  }
-  const created = { id: turnId, items: [] };
-  context.turns.push(created);
-  return created;
+function clearActiveTurnTracking(context: PiSessionContext): void {
+  context.activeTurnId = undefined;
+  context.activeTurnGeneration += 1;
+  context.activeTurnStarted = false;
+  context.activeAssistantTextEmitted = false;
+  context.activeTurnMessageStartIndex = 0;
+  context.activeToolCalls.clear();
 }
 
-function appendTurnItem(context: PiSessionContext, item: unknown): void {
-  if (!context.activeTurnId) {
-    return;
+function piSessionMessages(piSession: PiAgentSessionLike): ReadonlyArray<unknown> {
+  const messages = piSession.messages ?? piSession.state?.messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+function piSessionIsBusy(piSession: PiAgentSessionLike): boolean {
+  return piSession.isStreaming === true || piSession.isRetrying === true;
+}
+
+function isPiTurnStartEvent(type: string): boolean {
+  return type === "agent_start" || type === "turn_start" || type === "message_start";
+}
+
+function threadIdFromString(value: string | undefined): ThreadId | undefined {
+  return value ? ThreadId.makeUnsafe(value) : undefined;
+}
+
+function piMessagePayload(message: unknown): Record<string, unknown> | undefined {
+  const record = asRecord(message);
+  if (!record) {
+    return undefined;
   }
-  resolveTurnSnapshot(context, context.activeTurnId).items.push(item);
+  return asRecord(record.message) ?? record;
+}
+
+function piMessageRole(message: unknown): string | undefined {
+  return asTrimmedString(piMessagePayload(message)?.role);
+}
+
+function piFinalErrorFromPayload(payload: unknown): string | undefined {
+  const record = piMessagePayload(payload);
+  if (!record) {
+    return undefined;
+  }
+
+  const stopReason = asTrimmedString(record.stopReason);
+  if (stopReason !== "error") {
+    return undefined;
+  }
+
+  const directMessage =
+    asTrimmedString(record.errorMessage) ??
+    asTrimmedString(record.message) ??
+    asTrimmedString(asRecord(record.error)?.message) ??
+    asTrimmedString(record.error);
+  return directMessage ?? "Pi stopped with an error.";
+}
+
+function piFinalErrorFromEvent(event: Record<string, unknown>): string | undefined {
+  const direct = piFinalErrorFromPayload(event);
+  if (direct) {
+    return direct;
+  }
+
+  const message = piFinalErrorFromPayload(event.message) ?? piFinalErrorFromPayload(event.result);
+  if (message) {
+    return message;
+  }
+
+  if (Array.isArray(event.messages)) {
+    for (let index = event.messages.length - 1; index >= 0; index -= 1) {
+      const candidate = event.messages[index];
+      if (piMessageRole(candidate) !== "assistant") {
+        continue;
+      }
+      const error = piFinalErrorFromPayload(candidate);
+      if (error) {
+        return error;
+      }
+    }
+  }
+  return undefined;
+}
+
+function isRetryablePiError(message: string): boolean {
+  return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
+    message,
+  );
+}
+
+function piFinalErrorFromTurnMessages(context: PiSessionContext): string | undefined {
+  const messages = piSessionMessages(context.piSession);
+  const startIndex = Math.max(0, Math.min(context.activeTurnMessageStartIndex, messages.length));
+  for (let index = messages.length - 1; index >= startIndex; index -= 1) {
+    const candidate = messages[index];
+    if (piMessageRole(candidate) !== "assistant") {
+      continue;
+    }
+    const error = piFinalErrorFromPayload(candidate);
+    if (error) {
+      return error;
+    }
+  }
+  return undefined;
+}
+
+function piTextFromContent(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed.length > 0 ? content : undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  const parts: string[] = [];
+  for (const item of content) {
+    if (typeof item === "string") {
+      parts.push(item);
+      continue;
+    }
+    const record = asRecord(item);
+    if (!record) {
+      continue;
+    }
+    const type = asTrimmedString(record.type);
+    const text = typeof record.text === "string" ? record.text : undefined;
+    if ((type === undefined || type === "text" || type === "output_text") && text) {
+      parts.push(text);
+    }
+  }
+
+  const joined = parts.join("");
+  return joined.trim().length > 0 ? joined : undefined;
+}
+
+function piAssistantTextFromPayload(payload: unknown): string | undefined {
+  const record = piMessagePayload(payload);
+  if (!record || piMessageRole(record) !== "assistant" || piFinalErrorFromPayload(record)) {
+    return undefined;
+  }
+  return piTextFromContent(record.content);
+}
+
+function piFinalAssistantTextFromEvent(event: Record<string, unknown>): string | undefined {
+  const direct =
+    piAssistantTextFromPayload(event.message) ??
+    piAssistantTextFromPayload(event.result) ??
+    piAssistantTextFromPayload(event);
+  if (direct) {
+    return direct;
+  }
+
+  if (Array.isArray(event.messages)) {
+    for (let index = event.messages.length - 1; index >= 0; index -= 1) {
+      const text = piAssistantTextFromPayload(event.messages[index]);
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function piFinalAssistantTextFromTurnMessages(context: PiSessionContext): string | undefined {
+  const messages = piSessionMessages(context.piSession);
+  const startIndex = Math.max(0, Math.min(context.activeTurnMessageStartIndex, messages.length));
+  for (let index = messages.length - 1; index >= startIndex; index -= 1) {
+    const text = piAssistantTextFromPayload(messages[index]);
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
 }
 
 function buildPiThreadSnapshot(input: {
@@ -824,8 +999,36 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           : undefined);
       const managedNativeEventLogger =
         options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
-      const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const runtimeEvents = yield* Queue.sliding<ProviderRuntimeEvent>(
+        RUNTIME_EVENT_QUEUE_CAPACITY,
+      );
       const sessions = new Map<ThreadId, PiSessionContext>();
+      const threadOperationLocks = new Map<ThreadId, Promise<void>>();
+      let nextSessionGeneration = 0;
+
+      const acquireThreadOperation = Effect.fn("acquirePiThreadOperation")(function* (
+        threadId: ThreadId,
+      ) {
+        const previous = threadOperationLocks.get(threadId) ?? Promise.resolve();
+        let releaseGate!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          releaseGate = resolve;
+        });
+        const current = previous.catch(() => undefined).then(() => gate);
+        threadOperationLocks.set(threadId, current);
+        yield* Effect.promise(() => previous.catch(() => undefined));
+        let released = false;
+        return () => {
+          if (released) {
+            return;
+          }
+          released = true;
+          releaseGate();
+          if (threadOperationLocks.get(threadId) === current) {
+            threadOperationLocks.delete(threadId);
+          }
+        };
+      });
 
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
@@ -919,6 +1122,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
         context.unsubscribe?.();
         context.unsubscribe = null;
         yield* Effect.promise(() => context.piSession.abort()).pipe(Effect.ignore);
+        yield* Effect.promise(() => context.eventProcessing.catch(() => undefined));
         yield* Scope.close(context.sessionScope, Exit.void).pipe(Effect.ignore);
         yield* Effect.sync(() => context.piSession.dispose()).pipe(Effect.ignore);
       });
@@ -932,9 +1136,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
         if (input.context.stopped || input.context.activeTurnId !== input.turnId) {
           return;
         }
-        input.context.activeTurnId = undefined;
-        input.context.activeTurnStarted = false;
-        input.context.activeToolCalls.clear();
+        clearActiveTurnTracking(input.context);
         updateProviderSession(
           input.context,
           {
@@ -963,7 +1165,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
             type: "runtime.error",
             payload: {
               message: input.detail,
-              data: input.cause,
+              detail: input.cause,
             },
           });
         }
@@ -979,9 +1181,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
         }
         yield* emitPiContextWindowConfigured(input.context, input.raw);
         yield* emitPiTokenUsage(input.context, input.raw);
-        input.context.activeTurnId = undefined;
-        input.context.activeTurnStarted = false;
-        input.context.activeToolCalls.clear();
+        clearActiveTurnTracking(input.context);
         updateProviderSession(input.context, { status: "ready" }, { clearActiveTurnId: true });
         yield* emit({
           ...buildEventBase({
@@ -998,14 +1198,23 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
 
       const handlePiEvent = Effect.fn("handlePiEvent")(function* (
         context: PiSessionContext,
+        dispatch: PiEventDispatchContext,
         event: AgentSessionEvent | unknown,
       ) {
+        if (context.stopped || context.sessionGeneration !== dispatch.sessionGeneration) {
+          return;
+        }
         if (!event || typeof event !== "object" || !("type" in event)) {
           return;
         }
 
         const typedEvent = event as Record<string, unknown> & { type: string };
-        const turnId = context.activeTurnId;
+        const turnId =
+          dispatch.turnId &&
+          context.activeTurnId === dispatch.turnId &&
+          context.activeTurnGeneration === dispatch.turnGeneration
+            ? dispatch.turnId
+            : undefined;
         yield* writeNativeEventBestEffort(context.session.threadId, {
           provider: PROVIDER,
           threadId: context.session.threadId,
@@ -1013,6 +1222,40 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           type: typedEvent.type,
           payload: typedEvent,
         });
+
+        const requiresActiveTurn =
+          typedEvent.type === "agent_start" ||
+          typedEvent.type === "turn_start" ||
+          typedEvent.type === "turn_end" ||
+          typedEvent.type === "message_start" ||
+          typedEvent.type === "message_update" ||
+          typedEvent.type === "tool_execution_start" ||
+          typedEvent.type === "tool_execution_update" ||
+          typedEvent.type === "tool_execution_end" ||
+          typedEvent.type === "message_end" ||
+          typedEvent.type === "auto_retry_start" ||
+          typedEvent.type === "auto_retry_end" ||
+          typedEvent.type === "agent_end";
+        if (requiresActiveTurn && !turnId) {
+          yield* Effect.logWarning("ignored stale Pi SDK event outside active turn", {
+            threadId: context.session.threadId,
+            eventType: typedEvent.type,
+          });
+          return;
+        }
+        if (
+          requiresActiveTurn &&
+          turnId &&
+          !context.activeTurnStarted &&
+          !isPiTurnStartEvent(typedEvent.type)
+        ) {
+          yield* Effect.logWarning("ignored Pi SDK event before active turn start", {
+            threadId: context.session.threadId,
+            turnId,
+            eventType: typedEvent.type,
+          });
+          return;
+        }
 
         switch (typedEvent.type) {
           case "agent_start":
@@ -1042,6 +1285,9 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
             if (typeof delta !== "string" || delta.length === 0) {
               break;
             }
+            if (eventType === "text_delta") {
+              context.activeAssistantTextEmitted = true;
+            }
             yield* emit({
               ...buildEventBase({ threadId: context.session.threadId, turnId, raw: typedEvent }),
               type: "content.delta",
@@ -1063,18 +1309,20 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
             const toolCallId = String(typedEvent.toolCallId ?? randomUUID());
             const toolName = String(typedEvent.toolName ?? "tool");
             const itemType = toToolLifecycleItemType(toolName);
+            const startedAt = nowIso();
             context.activeToolCalls.set(toolCallId, {
               id: toolCallId,
               toolName,
               itemType,
+              startedAt,
               args: typedEvent.args,
             });
-            appendTurnItem(context, typedEvent);
             yield* emit({
               ...buildEventBase({
                 threadId: context.session.threadId,
                 turnId,
                 itemId: toolCallId,
+                createdAt: startedAt,
                 raw: typedEvent,
               }),
               type: "item.started",
@@ -1097,13 +1345,16 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
               id: toolCallId,
               toolName: String(typedEvent.toolName ?? "tool"),
               itemType: toToolLifecycleItemType(String(typedEvent.toolName ?? "tool")),
+              startedAt: nowIso(),
               args: typedEvent.args,
             };
+            context.activeToolCalls.set(toolCallId, tracked);
             yield* emit({
               ...buildEventBase({
                 threadId: context.session.threadId,
                 turnId,
                 itemId: toolCallId,
+                createdAt: tracked.startedAt,
                 raw: typedEvent,
               }),
               type: "item.updated",
@@ -1127,6 +1378,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
               id: toolCallId,
               toolName: String(typedEvent.toolName ?? "tool"),
               itemType: toToolLifecycleItemType(String(typedEvent.toolName ?? "tool")),
+              startedAt: nowIso(),
               args: typedEvent.args,
             };
             context.activeToolCalls.delete(toolCallId);
@@ -1135,6 +1387,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
                 threadId: context.session.threadId,
                 turnId,
                 itemId: toolCallId,
+                createdAt: tracked.startedAt,
                 raw: typedEvent,
               }),
               type: "item.completed",
@@ -1186,8 +1439,91 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
             break;
           }
 
+          case "turn_end": {
+            if (turnId) {
+              context.activeTurnStarted = true;
+            }
+            if (!context.activeAssistantTextEmitted) {
+              const finalText = piFinalAssistantTextFromEvent(typedEvent);
+              if (finalText) {
+                context.activeAssistantTextEmitted = true;
+                yield* emit({
+                  ...buildEventBase({
+                    threadId: context.session.threadId,
+                    turnId,
+                    raw: { type: "pi.final_text_recovered", source: typedEvent },
+                  }),
+                  type: "content.delta",
+                  payload: {
+                    streamKind: "assistant_text",
+                    delta: finalText,
+                  },
+                });
+              }
+            }
+            break;
+          }
+
+          case "auto_retry_start": {
+            if (turnId) {
+              context.activeTurnStarted = true;
+            }
+            yield* emit({
+              ...buildEventBase({ threadId: context.session.threadId, turnId, raw: typedEvent }),
+              type: "item.updated",
+              payload: {
+                itemType: "error",
+                status: "inProgress",
+                detail: detailFromUnknown(typedEvent.errorMessage) ?? "Pi is retrying the request.",
+                data: typedEvent,
+              },
+            });
+            break;
+          }
+
+          case "auto_retry_end": {
+            if (!turnId) {
+              break;
+            }
+            context.activeTurnStarted = true;
+            if (typedEvent.success === false) {
+              yield* failActivePiTurn({
+                context,
+                turnId,
+                detail:
+                  detailFromUnknown(typedEvent.finalError) ??
+                  detailFromUnknown(typedEvent.errorMessage) ??
+                  "Pi retry failed.",
+                cause: typedEvent,
+              });
+            }
+            break;
+          }
+
           case "agent_end": {
             if (!turnId) {
+              break;
+            }
+            const finalError =
+              piFinalErrorFromEvent(typedEvent) ?? piFinalErrorFromTurnMessages(context);
+            if (finalError) {
+              if (isRetryablePiError(finalError)) {
+                yield* Effect.logWarning(
+                  "Pi agent_end contained retryable error; waiting for retry",
+                  {
+                    threadId: context.session.threadId,
+                    turnId,
+                    detail: finalError,
+                  },
+                );
+                break;
+              }
+              yield* failActivePiTurn({
+                context,
+                turnId,
+                detail: finalError,
+                cause: typedEvent,
+              });
               break;
             }
             if (!context.activeTurnStarted) {
@@ -1197,6 +1533,26 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
                 eventType: typedEvent.type,
               });
               break;
+            }
+            if (!context.activeAssistantTextEmitted) {
+              const finalText =
+                piFinalAssistantTextFromEvent(typedEvent) ??
+                piFinalAssistantTextFromTurnMessages(context);
+              if (finalText) {
+                context.activeAssistantTextEmitted = true;
+                yield* emit({
+                  ...buildEventBase({
+                    threadId: context.session.threadId,
+                    turnId,
+                    raw: { type: "pi.final_text_recovered", source: typedEvent },
+                  }),
+                  type: "content.delta",
+                  payload: {
+                    streamKind: "assistant_text",
+                    delta: finalText,
+                  },
+                });
+              }
             }
             yield* completeActivePiTurn({
               context,
@@ -1221,158 +1577,173 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
             });
           }
 
-          const cwd = input.cwd ?? serverConfig.cwd;
-          const existing = sessions.get(input.threadId);
-          if (existing) {
-            yield* stopPiContext(existing);
-            sessions.delete(input.threadId);
-          }
+          const releaseThreadOperation = yield* acquireThreadOperation(input.threadId);
+          try {
+            const cwd = input.cwd ?? serverConfig.cwd;
+            const existing = sessions.get(input.threadId);
+            if (existing) {
+              yield* stopPiContext(existing);
+              sessions.delete(input.threadId);
+            }
 
-          const services = yield* Effect.promise(() => runtime.createServices({ cwd })).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "createAgentSessionServices",
-                  detail: errorMessage(cause),
-                  cause,
-                }),
-            ),
-          );
-          const selectedModelSlug =
-            input.modelSelection?.provider === PROVIDER
-              ? input.modelSelection.model
-              : DEFAULT_PI_MODEL;
-          const parsedModel = parsePiModelSlug(selectedModelSlug);
-          const model =
-            parsedModel !== null
-              ? services.modelRegistry.find(parsedModel.provider, parsedModel.id)
-              : undefined;
-          if (input.modelSelection?.provider === PROVIDER && (!parsedModel || !model)) {
-            return yield* new ProviderAdapterValidationError({
-              provider: PROVIDER,
-              operation: "startSession",
-              issue: `Pi model '${selectedModelSlug}' is not available.`,
-            });
-          }
-          const requestedThinkingLevel =
-            input.modelSelection?.provider === PROVIDER
-              ? input.modelSelection.options?.thinkingLevel
-              : undefined;
-          const thinkingLevel =
-            requestedThinkingLevel && PI_THINKING_LEVELS.has(requestedThinkingLevel)
-              ? requestedThinkingLevel
-              : model?.reasoning
-                ? "medium"
-                : undefined;
-          const resumeSessionFile = resolveResumeSessionFile(input.resumeCursor);
-          const sessionManager = resumeSessionFile
-            ? runtime.openSessionManager(resumeSessionFile)
-            : runtime.createSessionManager(cwd);
-          const { session: piSession } = yield* Effect.promise(() =>
-            runtime.createSessionFromServices({
-              services,
-              sessionManager,
-              ...(model ? { model } : {}),
-              ...(thinkingLevel ? { thinkingLevel } : {}),
-            }),
-          ).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "createAgentSessionFromServices",
-                  detail: errorMessage(cause),
-                  cause,
-                }),
-            ),
-          );
-
-          if (piSession.bindExtensions) {
-            yield* Effect.promise(() => piSession.bindExtensions?.({}) ?? Promise.resolve()).pipe(
+            const services = yield* Effect.promise(() => runtime.createServices({ cwd })).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapterRequestError({
                     provider: PROVIDER,
-                    method: "bindExtensions",
+                    method: "createAgentSessionServices",
                     detail: errorMessage(cause),
                     cause,
                   }),
               ),
             );
-          }
-
-          const createdAt = nowIso();
-          const sessionFile = piSession.sessionManager.getSessionFile();
-          const sessionScope = yield* Scope.make();
-          const session: ProviderSession = {
-            provider: PROVIDER,
-            status: "ready",
-            runtimeMode: "full-access",
-            cwd,
-            ...(selectedModelSlug ? { model: selectedModelSlug } : {}),
-            threadId: input.threadId,
-            resumeCursor: { ...(sessionFile ? { sessionFile } : {}), cwd },
-            createdAt,
-            updatedAt: createdAt,
-          };
-          const context: PiSessionContext = {
-            session,
-            piSession,
-            sessionScope,
-            unsubscribe: null,
-            eventProcessing: Promise.resolve(),
-            activeTurnId: undefined,
-            activeTurnStarted: false,
-            turns: [],
-            activeToolCalls: new Map(),
-            lastEmittedContextWindowKey: undefined,
-            lastEmittedTokenUsageKey: undefined,
-            stopped: false,
-          };
-          context.unsubscribe = piSession.subscribe((event) => {
-            context.eventProcessing = context.eventProcessing
-              .catch(() => undefined)
-              .then(() => Effect.runPromise(handlePiEvent(context, event)))
-              .catch((cause) => {
-                Effect.runFork(
-                  Effect.logWarning("failed to handle Pi SDK event", {
-                    threadId: context.session.threadId,
-                    cause: errorMessage(cause),
-                  }),
-                );
+            const selectedModelSlug =
+              input.modelSelection?.provider === PROVIDER
+                ? input.modelSelection.model
+                : DEFAULT_PI_MODEL;
+            const parsedModel = parsePiModelSlug(selectedModelSlug);
+            const model =
+              parsedModel !== null
+                ? services.modelRegistry.find(parsedModel.provider, parsedModel.id)
+                : undefined;
+            if (input.modelSelection?.provider === PROVIDER && (!parsedModel || !model)) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "startSession",
+                issue: `Pi model '${selectedModelSlug}' is not available.`,
               });
-          });
-          sessions.set(input.threadId, context);
+            }
+            const requestedThinkingLevel =
+              input.modelSelection?.provider === PROVIDER
+                ? input.modelSelection.options?.thinkingLevel
+                : undefined;
+            const thinkingLevel =
+              requestedThinkingLevel && PI_THINKING_LEVELS.has(requestedThinkingLevel)
+                ? requestedThinkingLevel
+                : model?.reasoning
+                  ? "medium"
+                  : undefined;
+            const resumeSessionFile = resolveResumeSessionFile(input.resumeCursor);
+            const sessionManager = yield* Effect.try({
+              try: () =>
+                resumeSessionFile
+                  ? runtime.openSessionManager(resumeSessionFile)
+                  : runtime.createSessionManager(cwd),
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: resumeSessionFile ? "openSessionManager" : "createSessionManager",
+                  detail: errorMessage(cause, "Failed to create Pi session manager."),
+                  cause,
+                }),
+            });
+            const { session: piSession } = yield* Effect.promise(() =>
+              runtime.createSessionFromServices({
+                services,
+                sessionManager,
+                ...(model ? { model } : {}),
+                ...(thinkingLevel ? { thinkingLevel } : {}),
+              }),
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "createAgentSessionFromServices",
+                    detail: errorMessage(cause),
+                    cause,
+                  }),
+              ),
+            );
 
-          yield* emit({
-            ...buildEventBase({ threadId: input.threadId }),
-            type: "session.started",
-            payload: {
-              message: resumeSessionFile ? "Pi session resumed" : "Pi session started",
-              resume: session.resumeCursor,
-            },
-          });
-          yield* emitPiContextWindowConfigured(context);
-          yield* emit({
-            ...buildEventBase({ threadId: input.threadId }),
-            type: "thread.started",
-            payload: sessionFile ? { providerThreadId: sessionFile } : {},
-          });
+            if (piSession.bindExtensions) {
+              yield* Effect.promise(() => piSession.bindExtensions?.({}) ?? Promise.resolve()).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "bindExtensions",
+                      detail: errorMessage(cause),
+                      cause,
+                    }),
+                ),
+              );
+            }
 
-          return session;
+            const createdAt = nowIso();
+            const sessionFile = piSession.sessionManager.getSessionFile();
+            const sessionScope = yield* Scope.make();
+            const session: ProviderSession = {
+              provider: PROVIDER,
+              status: "ready",
+              runtimeMode: "full-access",
+              cwd,
+              ...(model ? { model: selectedModelSlug } : {}),
+              threadId: input.threadId,
+              resumeCursor: { ...(sessionFile ? { sessionFile } : {}), cwd },
+              createdAt,
+              updatedAt: createdAt,
+            };
+            const context: PiSessionContext = {
+              session,
+              piSession,
+              sessionScope,
+              sessionGeneration: (nextSessionGeneration += 1),
+              unsubscribe: null,
+              eventProcessing: Promise.resolve(),
+              activeTurnId: undefined,
+              activeTurnGeneration: 0,
+              activeTurnStarted: false,
+              activeAssistantTextEmitted: false,
+              activeTurnMessageStartIndex: 0,
+              activeToolCalls: new Map(),
+              lastEmittedContextWindowKey: undefined,
+              lastEmittedTokenUsageKey: undefined,
+              stopped: false,
+            };
+            context.unsubscribe = piSession.subscribe((event) => {
+              const dispatch: PiEventDispatchContext = {
+                sessionGeneration: context.sessionGeneration,
+                turnId: context.activeTurnId,
+                turnGeneration: context.activeTurnGeneration,
+              };
+              context.eventProcessing = context.eventProcessing
+                .catch(() => undefined)
+                .then(() => Effect.runPromise(handlePiEvent(context, dispatch, event)))
+                .catch((cause) => {
+                  Effect.runFork(
+                    Effect.logWarning("failed to handle Pi SDK event", {
+                      threadId: context.session.threadId,
+                      cause: errorMessage(cause),
+                    }),
+                  );
+                });
+            });
+            sessions.set(input.threadId, context);
+
+            yield* emit({
+              ...buildEventBase({ threadId: input.threadId }),
+              type: "session.started",
+              payload: {
+                message: resumeSessionFile ? "Pi session resumed" : "Pi session started",
+                resume: session.resumeCursor,
+              },
+            });
+            yield* emitPiContextWindowConfigured(context);
+            yield* emit({
+              ...buildEventBase({ threadId: input.threadId }),
+              type: "thread.started",
+              payload: sessionFile ? { providerThreadId: sessionFile } : {},
+            });
+
+            return session;
+          } finally {
+            releaseThreadOperation();
+          }
         },
       );
 
       const sendTurn: PiAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-        const context = ensureSessionContext(sessions, input.threadId);
-        if (context.activeTurnId) {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "sendTurn",
-            detail: "Pi already has an active turn for this session.",
-          });
-        }
         if (input.interactionMode === "plan") {
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -1382,70 +1753,89 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
         }
 
         const text = input.input?.trim() ?? "";
-        if (!text && (!input.attachments || input.attachments.length === 0)) {
+        const imageAttachments = (input.attachments ?? []).filter(
+          (attachment) => attachment.type === "image",
+        );
+        if (!text && imageAttachments.length === 0) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
-            issue: "Pi turns require text input or at least one attachment.",
+            issue: "Pi turns require text input or at least one image attachment.",
           });
         }
 
-        const modelSelection =
-          input.modelSelection?.provider === PROVIDER
-            ? input.modelSelection
-            : context.session.model
-              ? ({ provider: PROVIDER, model: context.session.model } as const)
-              : undefined;
-        if (modelSelection) {
-          const parsedModel = parsePiModelSlug(modelSelection.model);
-          if (!parsedModel) {
-            return yield* new ProviderAdapterValidationError({
+        const releaseThreadOperation = yield* acquireThreadOperation(input.threadId);
+        try {
+          const context = ensureSessionContext(sessions, input.threadId);
+          if (context.activeTurnId) {
+            return yield* new ProviderAdapterRequestError({
               provider: PROVIDER,
-              operation: "sendTurn",
-              issue: "Pi model selection must use the 'provider/model' format.",
+              method: "sendTurn",
+              detail: "Pi already has an active turn for this session.",
             });
           }
-          const resolvedModel = context.piSession.modelRegistry?.find(
-            parsedModel.provider,
-            parsedModel.id,
-          );
-          const modelToUse =
-            resolvedModel ??
-            (isPiModelLike(context.piSession.model) &&
-            context.piSession.model.provider === parsedModel.provider &&
-            context.piSession.model.id === parsedModel.id
-              ? context.piSession.model
-              : undefined);
-          if (!modelToUse) {
-            return yield* new ProviderAdapterValidationError({
+          if (piSessionIsBusy(context.piSession)) {
+            return yield* new ProviderAdapterRequestError({
               provider: PROVIDER,
-              operation: "sendTurn",
-              issue: `Pi model '${modelSelection.model}' is not available.`,
+              method: "sendTurn",
+              detail: "Pi is still processing the previous turn.",
             });
           }
-          yield* Effect.promise(() => context.piSession.setModel(modelToUse)).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "setModel",
-                  detail: errorMessage(cause),
-                  cause,
-                }),
-            ),
-          );
-          yield* emitPiContextWindowConfigured(context);
-          const thinkingLevel = modelSelection.options?.thinkingLevel;
-          if (thinkingLevel && PI_THINKING_LEVELS.has(thinkingLevel)) {
-            yield* Effect.sync(() => context.piSession.setThinkingLevel(thinkingLevel));
-          } else if (modelToUse.reasoning) {
-            yield* Effect.sync(() => context.piSession.setThinkingLevel("medium"));
-          }
-        }
 
-        const images = yield* Effect.forEach(
-          (input.attachments ?? []).filter((attachment) => attachment.type === "image"),
-          (attachment) =>
+          const modelSelection =
+            input.modelSelection?.provider === PROVIDER
+              ? input.modelSelection
+              : context.session.model
+                ? ({ provider: PROVIDER, model: context.session.model } as const)
+                : undefined;
+          if (modelSelection) {
+            const parsedModel = parsePiModelSlug(modelSelection.model);
+            if (!parsedModel) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "sendTurn",
+                issue: "Pi model selection must use the 'provider/model' format.",
+              });
+            }
+            const resolvedModel = context.piSession.modelRegistry?.find(
+              parsedModel.provider,
+              parsedModel.id,
+            );
+            const modelToUse =
+              resolvedModel ??
+              (isPiModelLike(context.piSession.model) &&
+              context.piSession.model.provider === parsedModel.provider &&
+              context.piSession.model.id === parsedModel.id
+                ? context.piSession.model
+                : undefined);
+            if (!modelToUse) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "sendTurn",
+                issue: `Pi model '${modelSelection.model}' is not available.`,
+              });
+            }
+            yield* Effect.promise(() => context.piSession.setModel(modelToUse)).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "setModel",
+                    detail: errorMessage(cause),
+                    cause,
+                  }),
+              ),
+            );
+            yield* emitPiContextWindowConfigured(context);
+            const thinkingLevel = modelSelection.options?.thinkingLevel;
+            if (thinkingLevel && PI_THINKING_LEVELS.has(thinkingLevel)) {
+              yield* Effect.sync(() => context.piSession.setThinkingLevel(thinkingLevel));
+            } else if (modelToUse.reasoning) {
+              yield* Effect.sync(() => context.piSession.setThinkingLevel("medium"));
+            }
+          }
+
+          const images = yield* Effect.forEach(imageAttachments, (attachment) =>
             Effect.promise(async () => {
               const filePath = resolveAttachmentPath({
                 attachmentsDir: serverConfig.attachmentsDir,
@@ -1457,146 +1847,211 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
               const data = await readFile(filePath, "base64");
               return { type: "image" as const, data, mimeType: attachment.mimeType };
             }),
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "loadAttachment",
-                detail: errorMessage(cause, "Failed to load Pi image attachment."),
-                cause,
-              }),
-          ),
-        );
-
-        const turnId = TurnId.makeUnsafe(`pi-turn-${randomUUID()}`);
-        context.activeTurnId = turnId;
-        context.activeTurnStarted = false;
-        updateProviderSession(
-          context,
-          {
-            status: "running",
-            activeTurnId: turnId,
-            runtimeMode: "full-access",
-            ...(modelSelection ? { model: modelSelection.model } : {}),
-          },
-          { clearLastError: true },
-        );
-        yield* emit({
-          ...buildEventBase({ threadId: input.threadId, turnId }),
-          type: "turn.started",
-          payload: {
-            ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-            ...(modelSelection?.options?.thinkingLevel
-              ? { effort: modelSelection.options.thinkingLevel }
-              : {}),
-          },
-        });
-
-        const promptAccepted = yield* Deferred.make<void, ProviderAdapterRequestError>();
-        const acceptPrompt = (accepted: boolean) => {
-          const result = accepted
-            ? Deferred.succeed(promptAccepted, undefined)
-            : Deferred.fail(
-                promptAccepted,
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "prompt",
-                  detail: "Pi rejected the prompt before dispatch.",
-                }),
-              );
-          Effect.runFork(result.pipe(Effect.ignore));
-        };
-        yield* Effect.promise(() =>
-          context.piSession.prompt(text, {
-            images,
-            preflightResult: acceptPrompt,
-          }),
-        ).pipe(
-          Effect.tap(() => Deferred.succeed(promptAccepted, undefined)),
-          Effect.tap(() =>
-            Effect.gen(function* () {
-              yield* Effect.promise(() => context.eventProcessing.catch(() => undefined));
-              if (context.activeTurnId !== turnId) {
-                return;
-              }
-              if (context.activeTurnStarted) {
-                yield* completeActivePiTurn({
-                  context,
-                  turnId,
-                  raw: { type: "pi.prompt.resolved_without_agent_end" },
-                });
-                return;
-              }
-              yield* failActivePiTurn({
-                context,
-                turnId,
-                detail: "Pi prompt finished without emitting any agent activity.",
-              });
-            }),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "prompt",
-                detail: errorMessage(cause),
-                cause,
-              }),
-          ),
-          Effect.tapError((requestError) =>
-            Deferred.fail(promptAccepted, requestError).pipe(
-              Effect.zipRight(
-                failActivePiTurn({
-                  context,
-                  turnId,
-                  detail: requestError.detail,
-                  cause: requestError.cause,
-                }),
-              ),
-              Effect.ignore,
-            ),
-          ),
-          Effect.forkIn(context.sessionScope),
-        );
-
-        yield* Deferred.await(promptAccepted).pipe(
-          Effect.tapError((requestError) =>
-            failActivePiTurn({
-              context,
-              turnId,
-              detail: requestError.detail,
-              cause: requestError.cause,
-            }),
-          ),
-        );
-
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: context.session.resumeCursor,
-        };
-      });
-
-      const interruptTurn: PiAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
-        function* (threadId, turnId) {
-          const context = ensureSessionContext(sessions, threadId);
-          const activeTurnId = turnId ?? context.activeTurnId;
-          yield* Effect.promise(() => context.piSession.abort()).pipe(
+          ).pipe(
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterRequestError({
                   provider: PROVIDER,
-                  method: "abort",
-                  detail: errorMessage(cause),
+                  method: "loadAttachment",
+                  detail: errorMessage(cause, "Failed to load Pi image attachment."),
                   cause,
                 }),
             ),
           );
-          context.activeTurnId = undefined;
+
+          const turnId = TurnId.makeUnsafe(`pi-turn-${randomUUID()}`);
+          context.activeTurnGeneration += 1;
+          context.activeTurnId = turnId;
           context.activeTurnStarted = false;
-          updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
-          if (activeTurnId) {
+          context.activeAssistantTextEmitted = false;
+          context.activeTurnMessageStartIndex = piSessionMessages(context.piSession).length;
+          updateProviderSession(
+            context,
+            {
+              status: "running",
+              activeTurnId: turnId,
+              runtimeMode: "full-access",
+              ...(modelSelection ? { model: modelSelection.model } : {}),
+            },
+            { clearLastError: true },
+          );
+          yield* emit({
+            ...buildEventBase({ threadId: input.threadId, turnId }),
+            type: "turn.started",
+            payload: {
+              ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+              ...(modelSelection?.options?.thinkingLevel
+                ? { effort: modelSelection.options.thinkingLevel }
+                : {}),
+            },
+          });
+
+          const promptAccepted = yield* Deferred.make<void, ProviderAdapterRequestError>();
+          let promptPreflightRejected = false;
+          const acceptPrompt = (accepted: boolean) => {
+            if (!accepted) {
+              promptPreflightRejected = true;
+              return;
+            }
+            const result = Deferred.succeed(promptAccepted, undefined);
+            Effect.runSync(result.pipe(Effect.ignore));
+          };
+          const promptPromise = yield* Effect.try({
+            try: () =>
+              context.piSession.prompt(text, {
+                images,
+                preflightResult: acceptPrompt,
+              }),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "prompt",
+                detail: errorMessage(
+                  cause,
+                  promptPreflightRejected
+                    ? "Pi rejected the prompt before dispatch."
+                    : "Pi request failed.",
+                ),
+                cause,
+              }),
+          }).pipe(
+            Effect.tapError((requestError) =>
+              failActivePiTurn({
+                context,
+                turnId,
+                detail: requestError.detail,
+                cause: requestError.cause,
+              }),
+            ),
+          );
+          promptPromise.catch((cause) => {
+            const requestError = new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "prompt",
+              detail: errorMessage(
+                cause,
+                promptPreflightRejected
+                  ? "Pi rejected the prompt before dispatch."
+                  : "Pi request failed.",
+              ),
+              cause,
+            });
+            Effect.runSync(Deferred.fail(promptAccepted, requestError).pipe(Effect.ignore));
+          });
+          yield* Effect.promise(() => promptPromise).pipe(
+            Effect.tap(() => Deferred.succeed(promptAccepted, undefined)),
+            Effect.tap(() =>
+              Effect.gen(function* () {
+                yield* Effect.promise(() => context.eventProcessing.catch(() => undefined));
+                if (context.activeTurnId !== turnId) {
+                  return;
+                }
+                if (piSessionIsBusy(context.piSession)) {
+                  yield* Effect.logWarning(
+                    "Pi prompt promise resolved while SDK still reports busy",
+                    {
+                      threadId: context.session.threadId,
+                      turnId,
+                    },
+                  );
+                  return;
+                }
+                if (context.activeTurnStarted) {
+                  yield* completeActivePiTurn({
+                    context,
+                    turnId,
+                    raw: { type: "pi.prompt.resolved_without_agent_end" },
+                  });
+                  return;
+                }
+                yield* failActivePiTurn({
+                  context,
+                  turnId,
+                  detail: "Pi prompt finished without emitting any agent activity.",
+                });
+              }),
+            ),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "prompt",
+                  detail: errorMessage(
+                    cause,
+                    promptPreflightRejected
+                      ? "Pi rejected the prompt before dispatch."
+                      : "Pi request failed.",
+                  ),
+                  cause,
+                }),
+            ),
+            Effect.tapError((requestError) =>
+              Deferred.fail(promptAccepted, requestError).pipe(
+                Effect.flatMap(() =>
+                  failActivePiTurn({
+                    context,
+                    turnId,
+                    detail: requestError.detail,
+                    cause: requestError.cause,
+                  }),
+                ),
+                Effect.ignore,
+              ),
+            ),
+            Effect.forkIn(context.sessionScope),
+          );
+
+          releaseThreadOperation();
+
+          yield* Deferred.await(promptAccepted).pipe(
+            Effect.tapError((requestError) =>
+              failActivePiTurn({
+                context,
+                turnId,
+                detail: requestError.detail,
+                cause: requestError.cause,
+              }),
+            ),
+          );
+
+          return {
+            threadId: input.threadId,
+            turnId,
+            ...(context.session.resumeCursor !== undefined
+              ? { resumeCursor: context.session.resumeCursor }
+              : {}),
+          };
+        } finally {
+          releaseThreadOperation();
+        }
+      });
+
+      const interruptTurn: PiAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
+        function* (threadId, turnId) {
+          const releaseThreadOperation = yield* acquireThreadOperation(threadId);
+          try {
+            const context = ensureSessionContext(sessions, threadId);
+            const activeTurnId = context.activeTurnId;
+            if (turnId && activeTurnId && turnId !== activeTurnId) {
+              return;
+            }
+            yield* Effect.promise(() => context.piSession.abort()).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "abort",
+                    detail: errorMessage(cause),
+                    cause,
+                  }),
+              ),
+            );
+            yield* Effect.promise(() => context.eventProcessing.catch(() => undefined));
+            if (!activeTurnId || context.activeTurnId !== activeTurnId) {
+              return;
+            }
+            clearActiveTurnTracking(context);
+            updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
             yield* emit({
               ...buildEventBase({ threadId, turnId: activeTurnId }),
               type: "turn.aborted",
@@ -1604,6 +2059,8 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
                 reason: "Interrupted by user.",
               },
             });
+          } finally {
+            releaseThreadOperation();
           }
         },
       );
@@ -1628,18 +2085,36 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
 
       const stopSession: PiAdapterShape["stopSession"] = Effect.fn("stopSession")(
         function* (threadId) {
-          const context = ensureSessionContext(sessions, threadId);
-          yield* stopPiContext(context);
-          sessions.delete(threadId);
-          yield* emit({
-            ...buildEventBase({ threadId }),
-            type: "session.exited",
-            payload: {
-              reason: "Session stopped.",
-              recoverable: false,
-              exitKind: "graceful",
-            },
-          });
+          const releaseThreadOperation = yield* acquireThreadOperation(threadId);
+          try {
+            const context = ensureSessionContext(sessions, threadId);
+            yield* Effect.promise(() => context.eventProcessing.catch(() => undefined));
+            const activeTurnId = context.activeTurnId;
+            if (activeTurnId) {
+              clearActiveTurnTracking(context);
+              updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
+              yield* emit({
+                ...buildEventBase({ threadId, turnId: activeTurnId }),
+                type: "turn.aborted",
+                payload: {
+                  reason: "Session stopped.",
+                },
+              });
+            }
+            yield* stopPiContext(context);
+            sessions.delete(threadId);
+            yield* emit({
+              ...buildEventBase({ threadId }),
+              type: "session.exited",
+              payload: {
+                reason: "Session stopped.",
+                recoverable: false,
+                exitKind: "graceful",
+              },
+            });
+          } finally {
+            releaseThreadOperation();
+          }
         },
       );
 
@@ -1661,11 +2136,21 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
 
       const rollbackThread: PiAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
         function* (threadId, numTurns) {
-          const context = ensureSessionContext(sessions, threadId);
-          if (numTurns > 0) {
-            context.turns.splice(Math.max(0, context.turns.length - numTurns), numTurns);
+          const releaseThreadOperation = yield* acquireThreadOperation(threadId);
+          try {
+            ensureSessionContext(sessions, threadId);
+            if (numTurns > 0) {
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "rollbackThread",
+                detail:
+                  "Pi rollback is not supported yet because the direct SDK session state cannot be safely rewound through DP Code.",
+              });
+            }
+            return yield* readThread(threadId);
+          } finally {
+            releaseThreadOperation();
           }
-          return yield* readThread(threadId);
         },
       );
 
@@ -1691,19 +2176,25 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
       const listModels: NonNullable<PiAdapterShape["listModels"]> = () =>
         Effect.gen(function* () {
           const cwd = serverConfig.cwd;
-          const services = yield* Effect.promise(() => runtime.createServices({ cwd })).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "modelRegistry.getAvailable",
-                  detail: errorMessage(cause),
-                  cause,
-                }),
-            ),
-          );
+          const existingRegistry = [...sessions.values()].find(
+            (context) => !context.stopped && context.session.cwd === cwd,
+          )?.piSession.modelRegistry;
+          const modelRegistry =
+            existingRegistry ??
+            (yield* Effect.promise(() => runtime.createServices({ cwd })).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "modelRegistry.getAvailable",
+                    detail: errorMessage(cause),
+                    cause,
+                  }),
+              ),
+              Effect.map((services) => services.modelRegistry),
+            ));
           return {
-            models: services.modelRegistry
+            models: modelRegistry
               .getAvailable()
               .map(toProviderModelDescriptor)
               .toSorted((left, right) => left.name.localeCompare(right.name)),
@@ -1714,24 +2205,24 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
 
       const listSkills: NonNullable<PiAdapterShape["listSkills"]> = (input) =>
         Effect.gen(function* () {
-          const activeContext = input.threadId
-            ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-            : [...sessions.values()].find((context) => !context.stopped);
+          const requestedThreadId = threadIdFromString(input.threadId);
+          const activeContext = requestedThreadId ? sessions.get(requestedThreadId) : undefined;
           const activeResourceLoader = activeContext?.piSession.resourceLoader;
           const resourceLoader =
-            activeResourceLoader ??
-            (yield* Effect.promise(() => runtime.createServices({ cwd: input.cwd })).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "skills/list",
-                    detail: errorMessage(cause, "Failed to discover Pi skills."),
-                    cause,
-                  }),
-              ),
-              Effect.map((services) => services.resourceLoader),
-            ));
+            activeContext && !activeContext.stopped && activeResourceLoader
+              ? activeResourceLoader
+              : yield* Effect.promise(() => runtime.createServices({ cwd: input.cwd })).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderAdapterRequestError({
+                        provider: PROVIDER,
+                        method: "skills/list",
+                        detail: errorMessage(cause, "Failed to discover Pi skills."),
+                        cause,
+                      }),
+                  ),
+                  Effect.map((services) => services.resourceLoader),
+                );
 
           if (!resourceLoader) {
             return {
@@ -1765,9 +2256,8 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
 
       const listCommands: NonNullable<PiAdapterShape["listCommands"]> = (input) =>
         Effect.gen(function* () {
-          const activeContext = input.threadId
-            ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-            : [...sessions.values()].find((context) => !context.stopped);
+          const requestedThreadId = threadIdFromString(input.threadId);
+          const activeContext = requestedThreadId ? sessions.get(requestedThreadId) : undefined;
           if (activeContext && !activeContext.stopped) {
             const resourceLoader = activeContext.piSession.resourceLoader;
             if (input.forceReload && resourceLoader) {
