@@ -289,6 +289,22 @@ export function createWsNativeApi(): NativeApi {
         if (!window.desktopBridge) return null;
         return window.desktopBridge.pickFolder();
       },
+      saveFile: async (input) => {
+        if (window.desktopBridge?.saveFile) {
+          return window.desktopBridge.saveFile(input);
+        }
+        const blob = new Blob([input.contents], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        try {
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = input.defaultFilename;
+          anchor.click();
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+        return null;
+      },
       confirm: async (message) => {
         return showConfirmDialogFallback(message);
       },
@@ -495,6 +511,12 @@ export function createWsNativeApi(): NativeApi {
           await window.desktopBridge.browser.setPanelBounds(input);
           return;
         }
+      },
+      attachWebview: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.attachWebview(input);
+        }
+        return cloneBrowserState(getFallbackBrowserState(input.threadId));
       },
       copyScreenshotToClipboard: async (input) => {
         if (window.desktopBridge) {

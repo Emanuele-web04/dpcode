@@ -18,7 +18,7 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { IpcMainEvent, MenuItemConstructorOptions } from "electron";
+import type { FileFilter, IpcMainEvent, MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
   DesktopTheme,
@@ -61,8 +61,13 @@ import {
 } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
-import { registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
-import { BrowserUsePipeServer } from "./browserUsePipeServer";
+import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
+import {
+  BrowserUsePipeServer,
+  DPCODE_BROWSER_USE_PIPE_ENV,
+  DPCODE_BROWSER_USE_PIPE_PATH,
+  T3CODE_BROWSER_USE_PIPE_ENV,
+} from "./browserUsePipeServer";
 import {
   DESKTOP_WS_URL_CHANNEL,
   normalizeDesktopWsUrl,
@@ -78,6 +83,7 @@ import {
 syncShellEnvironment();
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+const SAVE_FILE_CHANNEL = "desktop:save-file";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
@@ -118,11 +124,7 @@ const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DPCODE_BROWSER_LABEL = "DPCODE browser";
 const browserPerfLoggingEnabled =
-  process.env.DPCODE_BROWSER_PERF === "1" ||
-  process.env.T3CODE_BROWSER_PERF === "1" ||
-  (isDevelopment &&
-    process.env.DPCODE_BROWSER_PERF !== "0" &&
-    process.env.T3CODE_BROWSER_PERF !== "0");
+  process.env.DPCODE_BROWSER_PERF === "1" || process.env.T3CODE_BROWSER_PERF === "1";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -186,7 +188,11 @@ async function ensureBrowserUsePipeServer(): Promise<void> {
   if (browserUsePipeServer) {
     return;
   }
-  const server = new BrowserUsePipeServer(browserManager);
+  const server = new BrowserUsePipeServer(browserManager, {
+    requestOpenPanel: () => {
+      mainWindow?.webContents.send(BROWSER_IPC_CHANNELS.requestOpenPanel);
+    },
+  });
   await server.start();
   browserUsePipeServer = server;
 }
@@ -257,6 +263,38 @@ function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   }
 
   return null;
+}
+
+function isSaveFileInput(input: unknown): input is {
+  defaultFilename: string;
+  contents: string;
+  filters?: FileFilter[];
+} {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const record = input as Record<string, unknown>;
+  if (typeof record.defaultFilename !== "string" || record.defaultFilename.trim().length === 0) {
+    return false;
+  }
+  if (typeof record.contents !== "string") {
+    return false;
+  }
+  if (record.filters === undefined) {
+    return true;
+  }
+  if (!Array.isArray(record.filters)) {
+    return false;
+  }
+  return record.filters.every((filter) => {
+    if (!filter || typeof filter !== "object") return false;
+    const filterRecord = filter as Record<string, unknown>;
+    return (
+      typeof filterRecord.name === "string" &&
+      Array.isArray(filterRecord.extensions) &&
+      filterRecord.extensions.every((extension) => typeof extension === "string")
+    );
+  });
 }
 
 async function waitForBackendHttpReady(
@@ -1356,11 +1394,13 @@ function backendEnv(): NodeJS.ProcessEnv {
     DPCODE_PORT: String(backendPort),
     DPCODE_HOME: BASE_DIR,
     DPCODE_AUTH_TOKEN: backendAuthToken,
+    [DPCODE_BROWSER_USE_PIPE_ENV]: DPCODE_BROWSER_USE_PIPE_PATH,
     T3CODE_MODE: "desktop",
     T3CODE_NO_BROWSER: "1",
     T3CODE_PORT: String(backendPort),
     T3CODE_HOME: BASE_DIR,
     T3CODE_AUTH_TOKEN: backendAuthToken,
+    [T3CODE_BROWSER_USE_PIPE_ENV]: DPCODE_BROWSER_USE_PIPE_PATH,
   };
 }
 
@@ -1564,6 +1604,29 @@ function registerIpcHandlers(): void {
         });
     if (result.canceled) return null;
     return result.filePaths[0] ?? null;
+  });
+
+  ipcMain.removeHandler(SAVE_FILE_CHANNEL);
+  ipcMain.handle(SAVE_FILE_CHANNEL, async (_event, input: unknown) => {
+    if (!isSaveFileInput(input)) {
+      throw new Error("Invalid save file input.");
+    }
+
+    const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
+    const options = {
+      defaultPath: input.defaultFilename,
+      ...(input.filters ? { filters: input.filters } : {}),
+    };
+    const result = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    await FS.promises.writeFile(result.filePath, input.contents, "utf8");
+    return result.filePath;
   });
 
   ipcMain.removeHandler(CONFIRM_CHANNEL);
@@ -1784,6 +1847,7 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webviewTag: true,
     },
   });
   browserManager.setWindow(window);

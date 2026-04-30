@@ -22,6 +22,108 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.40",
+    date: "Apr 29",
+    features: [
+      {
+        id: "visible-browser-use-webview",
+        title: "Browser-use now drives the visible browser",
+        description:
+          "The desktop browser and browser-use tools now share the same visible webview, so automation, screenshots, navigation, and manual browsing stay in sync instead of racing separate hidden pages.",
+      },
+      {
+        id: "browser-panel-polish",
+        title: "The browser panel is steadier",
+        description:
+          "Browser resizing, overlay handling, tab controls, screenshot actions, and browser-use panel requests were tightened while keeping the browser from reopening by default.",
+      },
+      {
+        id: "plan-markdown-actions",
+        title: "Plans are easier to export",
+        description:
+          "Proposed plans now share one compact action set for copying markdown, saving into a `.plan` workspace folder, or exporting a markdown file through the desktop save dialog.",
+      },
+      {
+        id: "split-pane-maximize",
+        title: "Split panes maximize in place",
+        description:
+          "Maximizing a chat pane now removes only the focused pane and keeps the remaining split layout intact when possible, making it easier to focus without throwing away the whole arrangement.",
+      },
+      {
+        id: "git-branch-pr-flow",
+        title: "Git flows are smoother",
+        description:
+          "The Git menu now includes branch creation with DP Code-style names, and PR creation can recover from GitHub duplicate-PR responses by reusing the existing open pull request.",
+      },
+      {
+        id: "legacy-import-recovery",
+        title: "Legacy T3 imports heal themselves",
+        description:
+          "A new migration reconciles older imported T3 Code databases whose migration history skipped DP Code schema changes, preventing missing-column crashes after import.",
+      },
+      {
+        id: "runtime-idle-cleanup",
+        title: "Idle sessions clean up after themselves",
+        description:
+          "Provider runtimes and Codex discovery sessions now stop after idle periods, while active turns and pending approvals remain protected from premature shutdown.",
+      },
+      {
+        id: "assistant-stream-stability",
+        title: "Streaming output lands in the right message",
+        description:
+          "Assistant turn ingestion now prefers existing completed item IDs when possible, reducing placeholder duplication and keeping streamed assistant text attached to the intended message.",
+      },
+      {
+        id: "diff-copy-and-thread-details",
+        title: "Small workflow polish landed",
+        description:
+          "Diff views can copy the full patch directly, terminal-started chats get a clearer header icon, sidebar titles truncate more cleanly, and long transcripts cap normalized messages for lighter rendering.",
+      },
+    ],
+  },
+  {
+    version: "0.0.39",
+    date: "Apr 28",
+    features: [
+      {
+        id: "split-chat-drag-drop",
+        title: "Split chats are easier to arrange",
+        description:
+          "Split chat panes now support direct drag-and-drop, cross-project drops, and safer orphan handling so multi-chat layouts stay easier to build and recover.",
+      },
+      {
+        id: "split-chat-routing-stability",
+        title: "Split chat navigation is steadier",
+        description:
+          "Split chat activation, route restore, sidebar grouping, and thread subscriptions were tightened so opening and switching chats feels more predictable.",
+      },
+      {
+        id: "opencode-task-events",
+        title: "OpenCode tasks show live progress",
+        description:
+          "OpenCode todo events now flow into DP Code as active task updates, with a compact banner option for keeping current work visible without taking over the chat.",
+      },
+      {
+        id: "opencode-model-favourites",
+        title: "OpenCode models can be favourited",
+        description:
+          "The model picker now supports OpenCode favourites, making preferred models quicker to find across larger provider model lists.",
+      },
+      {
+        id: "opencode-context-usage",
+        title: "OpenCode context usage is tracked",
+        description:
+          "OpenCode sessions now report context usage more consistently, giving DP Code better runtime visibility as conversations grow.",
+      },
+      {
+        id: "production-debug-flags",
+        title: "Debug controls stay out of production",
+        description:
+          "Debug feature flags are now hidden behind local opt-in behavior, keeping production sidebars cleaner while preserving developer-only controls.",
+      },
+    ],
+  },
+  {
     version: "0.0.38",
     date: "Apr 26",
     features: [

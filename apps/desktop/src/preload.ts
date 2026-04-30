@@ -9,6 +9,7 @@ import {
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./voiceTranscription";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+const SAVE_FILE_CHANNEL = "desktop:save-file";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
@@ -35,6 +36,7 @@ function getDesktopWsUrl(): string | null {
 contextBridge.exposeInMainWorld("desktopBridge", {
   getWsUrl: getDesktopWsUrl,
   pickFolder: () => ipcRenderer.invoke(PICK_FOLDER_CHANNEL),
+  saveFile: (input) => ipcRenderer.invoke(SAVE_FILE_CHANNEL, input),
   confirm: (message) => ipcRenderer.invoke(CONFIRM_CHANNEL, message),
   setTheme: (theme) => ipcRenderer.invoke(SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) => ipcRenderer.invoke(CONTEXT_MENU_CHANNEL, items, position),
@@ -84,6 +86,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setPanelBounds: async (input) => {
       ipcRenderer.send(BROWSER_IPC_CHANNELS.setBounds, input);
     },
+    attachWebview: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.attachWebview, input),
     copyScreenshotToClipboard: (input) =>
       ipcRenderer.invoke(BROWSER_IPC_CHANNELS.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.captureScreenshot, input),
@@ -105,6 +108,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(BROWSER_IPC_CHANNELS.state, wrappedListener);
       return () => {
         ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.state, wrappedListener);
+      };
+    },
+    onBrowserUseOpenPanelRequest: (listener) => {
+      const wrappedListener = () => listener();
+      ipcRenderer.on(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
       };
     },
   },

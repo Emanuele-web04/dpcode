@@ -238,9 +238,25 @@ const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
-const CODEX_BROWSER_USE_PIPE_PATH =
-  process.platform === "win32" ? String.raw`\\.\pipe\codex-browser-use` : "/tmp/codex-browser-use";
+const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
+
+export function resolveCodexBrowserUsePipePath(
+  input: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly platform?: NodeJS.Platform;
+  } = {},
+): string {
+  const env = input.env ?? process.env;
+  const configured =
+    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() || env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
+  if (configured) {
+    return configured;
+  }
+  return (input.platform ?? process.platform) === "win32"
+    ? String.raw`\\.\pipe\codex-browser-use`
+    : "/tmp/codex-browser-use.sock";
+}
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -291,15 +307,16 @@ export function buildCodexProcessEnv(
   }
 
   if (platform !== "win32") {
+    const browserUsePipePath = resolveCodexBrowserUsePipePath({ env: effectiveEnv, platform });
     const allowedSockets =
       effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS]
         ?.split(",")
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0) ?? [];
-    if (!allowedSockets.includes(CODEX_BROWSER_USE_PIPE_PATH)) {
+    if (!allowedSockets.includes(browserUsePipePath)) {
       effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
         ...allowedSockets,
-        CODEX_BROWSER_USE_PIPE_PATH,
+        browserUsePipePath,
       ].join(",");
     }
   }
@@ -719,6 +736,7 @@ export interface CodexAppServerManagerEvents {
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
+  private readonly discoverySessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly skillsCache = new Map<string, ProviderListSkillsResult>();
   private readonly pluginsCache = new Map<string, ProviderListPluginsResult>();
   private readonly pluginDetailCache = new Map<string, ProviderReadPluginResult>();
@@ -736,6 +754,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let context: CodexSessionContext | undefined;
 
     try {
+      const existing = this.sessions.get(threadId);
+      if (existing) {
+        this.stopSession(threadId);
+      }
+
       const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
 
       const session: ProviderSession = {
@@ -1337,6 +1360,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let context: CodexSessionContext | undefined;
 
     try {
+      const existing = this.sessions.get(threadId);
+      if (existing) {
+        this.stopSession(threadId);
+      }
+
       const sourceProviderThreadId = readResumeCursorThreadId(input.sourceResumeCursor);
       if (!sourceProviderThreadId) {
         throw new Error("Provider fork is missing the source thread resume id.");
@@ -1909,9 +1937,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("No ChatGPT session token is available. Sign in to ChatGPT in Codex.");
     }
     if (authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
-      throw new Error(
-        "Voice transcription requires a ChatGPT-authenticated Codex session.",
-      );
+      throw new Error("Voice transcription requires a ChatGPT-authenticated Codex session.");
     }
 
     return {
@@ -1924,6 +1950,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const normalizedCwd = cwd.trim() || process.cwd();
     const existing = this.discoverySessions.get(normalizedCwd);
     if (existing && !existing.stopping && !existing.child.killed) {
+      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
       return existing;
     }
 
@@ -1980,6 +2007,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         // Discovery can still function without account metadata.
       }
       this.updateSession(context, { status: "ready" });
+      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
       return context;
     } catch (error) {
       this.stopDiscoverySession(normalizedCwd);
@@ -1987,7 +2015,40 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  private scheduleDiscoverySessionIdleStop(discoveryKey: string): void {
+    const existingTimer = this.discoverySessionIdleTimers.get(discoveryKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      const context = this.discoverySessions.get(discoveryKey);
+      if (!context || context.stopping) {
+        this.discoverySessionIdleTimers.delete(discoveryKey);
+        return;
+      }
+      if (
+        context.pending.size > 0 ||
+        context.pendingApprovals.size > 0 ||
+        context.pendingUserInputs.size > 0
+      ) {
+        this.scheduleDiscoverySessionIdleStop(discoveryKey);
+        return;
+      }
+
+      this.stopDiscoverySession(discoveryKey);
+    }, CODEX_DISCOVERY_SESSION_IDLE_MS);
+    timer.unref();
+    this.discoverySessionIdleTimers.set(discoveryKey, timer);
+  }
+
   private stopDiscoverySession(discoveryKey: string): void {
+    const idleTimer = this.discoverySessionIdleTimers.get(discoveryKey);
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      this.discoverySessionIdleTimers.delete(discoveryKey);
+    }
+
     const context = this.discoverySessions.get(discoveryKey);
     if (!context) {
       return;

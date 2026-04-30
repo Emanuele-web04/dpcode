@@ -484,16 +484,16 @@ function runtimeEventToActivities(
       ];
     }
 
-    case "turn.plan.updated": {
+    case "turn.tasks.updated": {
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
-          kind: "turn.plan.updated",
-          summary: "Plan updated",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
           payload: {
-            plan: event.payload.plan,
+            tasks: event.payload.tasks,
             ...(event.payload.explanation !== undefined
               ? { explanation: event.payload.explanation }
               : {}),
@@ -1032,15 +1032,17 @@ const make = Effect.gen(function* () {
     turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
-      if (input.event.itemId) {
-        return MessageId.makeUnsafe(`assistant:${input.event.itemId}`);
-      }
-
       if (input.turnId) {
         const knownAssistantMessageIds = yield* getAssistantMessageIdsForTurn(
           input.thread.id,
           input.turnId,
         );
+        if (input.event.itemId) {
+          const eventMessageId = MessageId.makeUnsafe(`assistant:${input.event.itemId}`);
+          if (knownAssistantMessageIds.has(eventMessageId)) {
+            return eventMessageId;
+          }
+        }
         if (knownAssistantMessageIds.size === 1) {
           const [onlyMessageId] = knownAssistantMessageIds;
           if (onlyMessageId) {
@@ -1072,7 +1074,13 @@ const make = Effect.gen(function* () {
             return preferredKnownMessage.id;
           }
         }
-        return MessageId.makeUnsafe(`assistant:${input.turnId}`);
+        return input.event.itemId
+          ? MessageId.makeUnsafe(`assistant:${input.event.itemId}`)
+          : MessageId.makeUnsafe(`assistant:${input.turnId}`);
+      }
+
+      if (input.event.itemId) {
+        return MessageId.makeUnsafe(`assistant:${input.event.itemId}`);
       }
 
       return MessageId.makeUnsafe(`assistant:${input.event.eventId}`);

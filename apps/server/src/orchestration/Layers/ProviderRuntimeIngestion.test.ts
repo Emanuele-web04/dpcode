@@ -2071,6 +2071,210 @@ describe("ProviderRuntimeIngestion", () => {
     expect(assistantMessages[0]?.text).toBe("Come together");
   });
 
+  it("reuses the live assistant message when item.completed supplies a late item id", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-late-completion-item-id"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("message-late-completion-item-id"),
+          role: "user",
+          text: "stream please",
+          attachments: [],
+        },
+        assistantDeliveryMode: "streaming",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-late-completion-item-id"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-completion-item-id"),
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-late-completion-item-id",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-assistant-delta-late-completion-item-id"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-completion-item-id"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "same answer",
+      },
+    });
+
+    await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:turn-late-completion-item-id" &&
+          message.streaming &&
+          message.text === "same answer",
+      ),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-assistant-completed-late-completion-item-id"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-completion-item-id"),
+      itemId: asItemId("item-late-completion-item-id"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "same answer",
+      },
+    });
+
+    const finalizedThread = await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:turn-late-completion-item-id" && !message.streaming,
+      ),
+    );
+
+    const assistantMessages = finalizedThread.messages.filter(
+      (message: ProviderRuntimeTestMessage) =>
+        message.role === "assistant" && message.turnId === "turn-late-completion-item-id",
+    );
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]?.id).toBe("assistant:turn-late-completion-item-id");
+    expect(assistantMessages[0]?.text).toBe("same answer");
+  });
+
+  it("honors the completed item id when a turn has multiple live assistant messages", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-multiple-assistant-items"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("message-multiple-assistant-items"),
+          role: "user",
+          text: "stream two messages",
+          attachments: [],
+        },
+        assistantDeliveryMode: "streaming",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-multiple-assistant-items"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-multiple-assistant-items",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-assistant-delta-multiple-assistant-items-a"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+      itemId: asItemId("item-multiple-assistant-items-a"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "first answer",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-assistant-delta-multiple-assistant-items-b"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+      itemId: asItemId("item-multiple-assistant-items-b"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "second answer",
+      },
+    });
+
+    await waitForThread(harness.engine, (thread) => {
+      const assistantMessages = thread.messages.filter(
+        (message: ProviderRuntimeTestMessage) =>
+          message.role === "assistant" && message.turnId === "turn-multiple-assistant-items",
+      );
+      return (
+        assistantMessages.length === 2 && assistantMessages.every((message) => message.streaming)
+      );
+    });
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-assistant-completed-multiple-assistant-items-a"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+      itemId: asItemId("item-multiple-assistant-items-a"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "first answer",
+      },
+    });
+
+    const finalizedThread = await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-multiple-assistant-items-a" && !message.streaming,
+      ),
+    );
+
+    const firstMessage = finalizedThread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:item-multiple-assistant-items-a",
+    );
+    const secondMessage = finalizedThread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:item-multiple-assistant-items-b",
+    );
+    expect(firstMessage?.text).toBe("first answer");
+    expect(firstMessage?.streaming).toBe(false);
+    expect(secondMessage?.text).toBe("second answer");
+    expect(secondMessage?.streaming).toBe(true);
+  });
+
   it("maps canonical request events into approval activities with requestKind", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -2277,17 +2481,17 @@ describe("ProviderRuntimeIngestion", () => {
     });
 
     harness.emit({
-      type: "turn.plan.updated",
-      eventId: asEventId("evt-turn-plan-updated"),
+      type: "turn.tasks.updated",
+      eventId: asEventId("evt-turn-tasks-updated"),
       provider: "codex",
       createdAt: now,
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-p1"),
       payload: {
-        explanation: "Working through the plan",
-        plan: [
-          { step: "Inspect files", status: "completed" },
-          { step: "Apply patch", status: "in_progress" },
+        explanation: "Working through the tasks",
+        tasks: [
+          { task: "Inspect files", status: "completed" },
+          { task: "Apply patch", status: "inProgress" },
         ],
       },
     });
@@ -2340,7 +2544,7 @@ describe("ProviderRuntimeIngestion", () => {
       (entry) =>
         entry.title === "Renamed by provider" &&
         entry.activities.some(
-          (activity: ProviderRuntimeTestActivity) => activity.kind === "turn.plan.updated",
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "turn.tasks.updated",
         ) &&
         entry.activities.some(
           (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.updated",
@@ -2355,15 +2559,15 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(thread.title).toBe("Renamed by provider");
 
-    const planActivity = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-plan-updated",
+    const taskActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-tasks-updated",
     );
-    const planPayload =
-      planActivity?.payload && typeof planActivity.payload === "object"
-        ? (planActivity.payload as Record<string, unknown>)
+    const taskPayload =
+      taskActivity?.payload && typeof taskActivity.payload === "object"
+        ? (taskActivity.payload as Record<string, unknown>)
         : undefined;
-    expect(planActivity?.kind).toBe("turn.plan.updated");
-    expect(Array.isArray(planPayload?.plan)).toBe(true);
+    expect(taskActivity?.kind).toBe("turn.tasks.updated");
+    expect(Array.isArray(taskPayload?.tasks)).toBe(true);
 
     const toolUpdate = thread.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-item-updated",
