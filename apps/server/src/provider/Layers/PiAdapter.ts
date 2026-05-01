@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
 import {
@@ -15,6 +16,7 @@ import {
   type ProviderListModelsResult,
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
+  type ProviderSendTurnInput,
   type ProviderSession,
   RuntimeItemId,
   type ThreadTokenUsageSnapshot,
@@ -36,8 +38,6 @@ import {
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 
 const PROVIDER = "pi" as const;
-const DEFAULT_PI_MODEL = "openai/gpt-5";
-const RUNTIME_EVENT_QUEUE_CAPACITY = 10_000;
 const PI_THINKING_LEVELS = new Set<PiThinkingLevel>([
   "off",
   "minimal",
@@ -138,6 +138,14 @@ interface PiAgentSessionLike {
       readonly preflightResult?: (success: boolean) => void;
     },
   ) => Promise<void>;
+  readonly steer: (
+    text: string,
+    images?: ReadonlyArray<{ type: "image"; data: string; mimeType: string }>,
+  ) => Promise<void>;
+  readonly followUp: (
+    text: string,
+    images?: ReadonlyArray<{ type: "image"; data: string; mimeType: string }>,
+  ) => Promise<void>;
   readonly abort: () => Promise<void>;
   readonly dispose: () => void;
   readonly setModel: (model: unknown) => Promise<void>;
@@ -149,7 +157,10 @@ interface PiAgentSessionLike {
 }
 
 interface PiRuntimeShape {
-  readonly createServices: (input: { readonly cwd: string }) => Promise<PiServicesLike>;
+  readonly createServices: (input: {
+    readonly cwd: string;
+    readonly binaryPath?: string | undefined;
+  }) => Promise<PiServicesLike>;
   readonly createSessionFromServices: (input: {
     readonly services: PiServicesLike;
     readonly sessionManager: unknown;
@@ -164,6 +175,7 @@ export interface PiAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly runtime?: PiRuntimeShape;
+  readonly verifyBinaryPath?: (binaryPath: string | undefined) => Promise<void>;
 }
 
 interface PiTrackedToolCall {
@@ -215,8 +227,26 @@ interface PiEventDispatchContext {
   readonly turnGeneration: number;
 }
 
+type PiQueuedTurnMethod = "steer" | "followUp";
+
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+async function verifyPiBinaryPath(binaryPath: string | undefined): Promise<void> {
+  const trimmed = binaryPath?.trim();
+  if (!trimmed) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    execFile(trimmed, ["--version"], { timeout: 4_000 }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 function errorMessage(error: unknown, fallback = "Pi request failed."): string {
@@ -838,6 +868,27 @@ function piFinalAssistantTextFromTurnMessages(context: PiSessionContext): string
   return undefined;
 }
 
+function buildPiTurnPrompt(input: {
+  readonly text: string;
+  readonly skills?: ReadonlyArray<{ readonly name: string }> | undefined;
+  readonly mentions?: ReadonlyArray<{ readonly name: string; readonly path: string }> | undefined;
+}): string {
+  const prefixes: string[] = [];
+  for (const skill of input.skills ?? []) {
+    const name = asTrimmedString(skill.name);
+    if (name) {
+      prefixes.push(`/skill:${name}`);
+    }
+  }
+  const mentions = (input.mentions ?? [])
+    .map((mention) => asTrimmedString(mention.path) ?? asTrimmedString(mention.name))
+    .filter((value): value is string => value !== undefined);
+  if (mentions.length > 0) {
+    prefixes.push(`Referenced files:\n${mentions.map((path) => `@${path}`).join("\n")}`);
+  }
+  return [...prefixes, input.text].filter((part) => part.trim().length > 0).join("\n\n");
+}
+
 function buildPiThreadSnapshot(input: {
   readonly threadId: ThreadId;
   readonly messages: ReadonlyArray<unknown>;
@@ -992,6 +1043,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig;
       const runtime = options?.runtime ?? makeDefaultPiRuntime();
+      const verifyBinaryPath = options?.verifyBinaryPath ?? verifyPiBinaryPath;
       const nativeEventLogger =
         options?.nativeEventLogger ??
         (options?.nativeEventLogPath !== undefined
@@ -999,9 +1051,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           : undefined);
       const managedNativeEventLogger =
         options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
-      const runtimeEvents = yield* Queue.sliding<ProviderRuntimeEvent>(
-        RUNTIME_EVENT_QUEUE_CAPACITY,
-      );
+      const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
       const sessions = new Map<ThreadId, PiSessionContext>();
       const threadOperationLocks = new Map<ThreadId, Promise<void>>();
       let nextSessionGeneration = 0;
@@ -1586,7 +1636,24 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
               sessions.delete(input.threadId);
             }
 
-            const services = yield* Effect.promise(() => runtime.createServices({ cwd })).pipe(
+            const piBinaryPath = input.providerOptions?.pi?.binaryPath;
+            yield* Effect.promise(() => verifyBinaryPath(piBinaryPath)).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "verifyPiBinaryPath",
+                    detail: errorMessage(cause, "Failed to verify Pi binary path."),
+                    cause,
+                  }),
+              ),
+            );
+            const services = yield* Effect.promise(() =>
+              runtime.createServices({
+                cwd,
+                ...(piBinaryPath ? { binaryPath: piBinaryPath } : {}),
+              }),
+            ).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapterRequestError({
@@ -1598,9 +1665,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
               ),
             );
             const selectedModelSlug =
-              input.modelSelection?.provider === PROVIDER
-                ? input.modelSelection.model
-                : DEFAULT_PI_MODEL;
+              input.modelSelection?.provider === PROVIDER ? input.modelSelection.model : undefined;
             const parsedModel = parsePiModelSlug(selectedModelSlug);
             const model =
               parsedModel !== null
@@ -1673,12 +1738,15 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
             const createdAt = nowIso();
             const sessionFile = piSession.sessionManager.getSessionFile();
             const sessionScope = yield* Scope.make();
+            const actualModelSlug = isPiModelLike(piSession.model)
+              ? `${piSession.model.provider}/${piSession.model.id}`
+              : selectedModelSlug;
             const session: ProviderSession = {
               provider: PROVIDER,
               status: "ready",
               runtimeMode: "full-access",
               cwd,
-              ...(model ? { model: selectedModelSlug } : {}),
+              ...(actualModelSlug ? { model: actualModelSlug } : {}),
               threadId: input.threadId,
               resumeCursor: { ...(sessionFile ? { sessionFile } : {}), cwd },
               createdAt,
@@ -1752,7 +1820,11 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           });
         }
 
-        const text = input.input?.trim() ?? "";
+        const text = buildPiTurnPrompt({
+          text: input.input?.trim() ?? "",
+          skills: input.skills,
+          mentions: input.mentions,
+        });
         const imageAttachments = (input.attachments ?? []).filter(
           (attachment) => attachment.type === "image",
         );
@@ -2026,6 +2098,102 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
         }
       });
 
+      const queuePiTurnInput = Effect.fn("queuePiTurnInput")(function* (input: {
+        readonly method: PiQueuedTurnMethod;
+        readonly operation: string;
+        readonly emptyIssue: string;
+        readonly request: ProviderSendTurnInput;
+      }) {
+        const text = buildPiTurnPrompt({
+          text: input.request.input?.trim() ?? "",
+          skills: input.request.skills,
+          mentions: input.request.mentions,
+        });
+        const imageAttachments = (input.request.attachments ?? []).filter(
+          (attachment) => attachment.type === "image",
+        );
+        if (!text && imageAttachments.length === 0) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: input.operation,
+            issue: input.emptyIssue,
+          });
+        }
+
+        const releaseThreadOperation = yield* acquireThreadOperation(input.request.threadId);
+        try {
+          const context = ensureSessionContext(sessions, input.request.threadId);
+          const turnId = context.activeTurnId;
+          if (!turnId || !piSessionIsBusy(context.piSession)) {
+            const action = input.method === "steer" ? "steer" : "queue a follow-up for";
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: input.method,
+              detail: `Pi has no active turn to ${action}.`,
+            });
+          }
+          const images = yield* Effect.forEach(imageAttachments, (attachment) =>
+            Effect.promise(async () => {
+              const filePath = resolveAttachmentPath({
+                attachmentsDir: serverConfig.attachmentsDir,
+                attachment,
+              });
+              if (!filePath) {
+                throw new Error(`Invalid attachment path for ${attachment.id}.`);
+              }
+              const data = await readFile(filePath, "base64");
+              return { type: "image" as const, data, mimeType: attachment.mimeType };
+            }),
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "loadAttachment",
+                  detail: errorMessage(cause, "Failed to load Pi image attachment."),
+                  cause,
+                }),
+            ),
+          );
+          yield* Effect.promise(() => context.piSession[input.method](text, images)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: input.method,
+                  detail: errorMessage(cause),
+                  cause,
+                }),
+            ),
+          );
+          return {
+            threadId: input.request.threadId,
+            turnId,
+            ...(context.session.resumeCursor !== undefined
+              ? { resumeCursor: context.session.resumeCursor }
+              : {}),
+          };
+        } finally {
+          releaseThreadOperation();
+        }
+      });
+
+      const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (request) =>
+        queuePiTurnInput({
+          method: "steer",
+          operation: "steerTurn",
+          emptyIssue: "Pi steering requires text input or at least one image attachment.",
+          request,
+        });
+
+      const followUpTurn: NonNullable<PiAdapterShape["followUpTurn"]> = (request) =>
+        queuePiTurnInput({
+          method: "followUp",
+          operation: "followUpTurn",
+          emptyIssue: "Pi follow-ups require text input or at least one image attachment.",
+          request,
+        });
+
       const interruptTurn: PiAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
         function* (threadId, turnId) {
           const releaseThreadOperation = yield* acquireThreadOperation(threadId);
@@ -2173,7 +2341,7 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           );
         });
 
-      const listModels: NonNullable<PiAdapterShape["listModels"]> = () =>
+      const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
         Effect.gen(function* () {
           const cwd = serverConfig.cwd;
           const existingRegistry = [...sessions.values()].find(
@@ -2181,7 +2349,12 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           )?.piSession.modelRegistry;
           const modelRegistry =
             existingRegistry ??
-            (yield* Effect.promise(() => runtime.createServices({ cwd })).pipe(
+            (yield* Effect.promise(() =>
+              runtime.createServices({
+                cwd,
+                ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              }),
+            ).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapterRequestError({
@@ -2354,10 +2527,13 @@ export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
           supportsPluginMentions: false,
           supportsPluginDiscovery: false,
           supportsRuntimeModelList: true,
-          supportsTurnSteering: false,
+          supportsTurnSteering: true,
+          supportsTurnFollowUp: true,
         },
         startSession,
         sendTurn,
+        steerTurn,
+        followUpTurn,
         interruptTurn,
         respondToRequest,
         respondToUserInput,

@@ -271,7 +271,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkPiProviderStatus", () => {
-    it.effect("returns ready when pi is installed and credential env is present", () =>
+    it.effect("returns ready when Pi SDK is available and credential env is present", () =>
       Effect.gen(function* () {
         yield* clearPiCredentialEnv;
         yield* withEnvVar("OPENAI_API_KEY", "test-key");
@@ -280,25 +280,21 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "authenticated");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "pi 1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
+      }),
     );
 
-    it.effect("returns unavailable when pi is missing", () =>
+    it.effect("does not require a global pi CLI", () =>
       Effect.gen(function* () {
+        yield* clearPiCredentialEnv;
+        const fs = yield* FileSystem.FileSystem;
+        const tmpHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3-test-pi-home-" });
+        yield* withEnvVar("HOME", tmpHome);
+
         const status = yield* checkPiProviderStatus;
         assert.strictEqual(status.provider, "pi");
-        assert.strictEqual(status.status, "error");
-        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "unknown");
-        assert.strictEqual(status.message, "Pi CLI (`pi`) is not installed or not on PATH.");
       }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
     );
 
@@ -316,17 +312,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(
           status.message,
-          "Pi CLI is installed. Configure provider credentials in Pi as needed.",
+          "Pi SDK is available. Configure provider credentials in Pi as needed.",
         );
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "pi 1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
+      }),
     );
 
     it.effect("returns authenticated when the Pi auth file exists", () =>
@@ -344,15 +332,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "authenticated");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "pi 1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
+      }),
     );
   });
 

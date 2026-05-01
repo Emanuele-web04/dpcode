@@ -133,6 +133,8 @@ function createFakePiRuntime() {
         }
       },
     ),
+    steer: vi.fn(async () => undefined),
+    followUp: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
     dispose: vi.fn(),
     setModel: vi.fn(async (model: unknown) => {
@@ -186,8 +188,12 @@ function createFakePiRuntime() {
   };
 }
 
+function setFakeSessionStreaming(session: ReturnType<typeof createFakePiRuntime>["session"]): void {
+  (session as typeof session & { isStreaming: boolean }).isStreaming = true;
+}
+
 function providePiAdapter(runtime: FakePiRuntime) {
-  return makePiAdapterLive({ runtime }).pipe(
+  return makePiAdapterLive({ runtime, verifyBinaryPath: async () => undefined }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pi-adapter-test-" })),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -264,7 +270,36 @@ describe("PiAdapter", () => {
     });
   });
 
-  it("does not store the fallback Pi model when the runtime registry cannot resolve it", async () => {
+  it("forwards Pi binary path and records the SDK-selected model when no model is requested", async () => {
+    const fake = createFakePiRuntime();
+
+    const session = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* PiAdapter;
+        return yield* adapter.startSession({
+          provider: "pi",
+          threadId: asThreadId("thread-pi-sdk-default"),
+          runtimeMode: "full-access",
+          providerOptions: {
+            pi: {
+              binaryPath: "/opt/bin/pi",
+            },
+          },
+        });
+      }).pipe(Effect.provide(providePiAdapter(fake.runtime))),
+    );
+
+    expect(fake.runtime.createServices).toHaveBeenCalledWith({
+      cwd: process.cwd(),
+      binaryPath: "/opt/bin/pi",
+    });
+    expect(fake.runtime.createSessionFromServices).toHaveBeenCalledWith(
+      expect.not.objectContaining({ model: expect.anything() }),
+    );
+    expect(session.model).toBe("openai/gpt-5");
+  });
+
+  it("does not pass an unavailable hard-coded fallback model into Pi session creation", async () => {
     const fake = createFakePiRuntime();
     fake.modelRegistry.find.mockImplementation((provider: string, id: string) =>
       provider === "openai" && id === "gpt-5"
@@ -285,11 +320,49 @@ describe("PiAdapter", () => {
       }).pipe(Effect.provide(providePiAdapter(fake.runtime))),
     );
 
-    expect(session.model).toBeUndefined();
+    expect(session.model).toBe("openai/gpt-5");
     expect(fake.runtime.createSessionFromServices).toHaveBeenCalledWith(
       expect.not.objectContaining({
         model: expect.anything(),
       }),
+    );
+  });
+
+  it("expands selected Pi skills and mentions into the prompt text", async () => {
+    const fake = createFakePiRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* PiAdapter;
+        yield* adapter.startSession({
+          provider: "pi",
+          threadId: asThreadId("thread-pi-skills-mentions"),
+          runtimeMode: "full-access",
+          modelSelection: {
+            provider: "pi",
+            model: "openai/gpt-5",
+          },
+        });
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-pi-skills-mentions"),
+          input: "review this",
+          attachments: [],
+          interactionMode: "default",
+          skills: [{ name: "review-code", path: "/tmp/pi-skills/review-code/SKILL.md" }],
+          mentions: [
+            { name: "PiAdapter.ts", path: "apps/server/src/provider/Layers/PiAdapter.ts" },
+          ],
+        });
+      }).pipe(Effect.provide(providePiAdapter(fake.runtime))),
+    );
+
+    expect(fake.session.prompt).toHaveBeenCalledWith(
+      [
+        "/skill:review-code",
+        "Referenced files:\n@apps/server/src/provider/Layers/PiAdapter.ts",
+        "review this",
+      ].join("\n\n"),
+      expect.any(Object),
     );
   });
 
@@ -425,6 +498,96 @@ describe("PiAdapter", () => {
       "thread.token-usage.updated",
       "turn.completed",
     ]);
+  });
+
+  it("steers an active Pi turn", async () => {
+    const fake = createFakePiRuntime();
+    let resolvePrompt: (() => void) | undefined;
+    fake.session.prompt.mockImplementation(async (_text, options) => {
+      options?.preflightResult?.(true);
+      await new Promise<void>((resolve) => {
+        resolvePrompt = resolve;
+      });
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* PiAdapter;
+        yield* adapter.startSession({
+          provider: "pi",
+          threadId: asThreadId("thread-pi-steer"),
+          runtimeMode: "full-access",
+          modelSelection: { provider: "pi", model: "openai/gpt-5" },
+        });
+        const turn = yield* adapter.sendTurn({
+          threadId: asThreadId("thread-pi-steer"),
+          input: "start",
+          attachments: [],
+          interactionMode: "default",
+        });
+        setFakeSessionStreaming(fake.session);
+        const steered = yield* adapter.steerTurn!({
+          threadId: asThreadId("thread-pi-steer"),
+          input: "actually do this",
+          attachments: [],
+          interactionMode: "default",
+          skills: [{ name: "review-code", path: "/tmp/pi-skills/review-code/SKILL.md" }],
+        });
+        resolvePrompt?.();
+        return { steered, turn };
+      }).pipe(Effect.provide(providePiAdapter(fake.runtime))),
+    );
+
+    expect(result.steered.turnId).toBe(result.turn.turnId);
+    expect(fake.session.steer).toHaveBeenCalledWith(
+      ["/skill:review-code", "actually do this"].join("\n\n"),
+      [],
+    );
+  });
+
+  it("queues a Pi follow-up in the active turn", async () => {
+    const fake = createFakePiRuntime();
+    let resolvePrompt: (() => void) | undefined;
+    fake.session.prompt.mockImplementation(async (_text, options) => {
+      options?.preflightResult?.(true);
+      await new Promise<void>((resolve) => {
+        resolvePrompt = resolve;
+      });
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* PiAdapter;
+        yield* adapter.startSession({
+          provider: "pi",
+          threadId: asThreadId("thread-pi-follow-up"),
+          runtimeMode: "full-access",
+          modelSelection: { provider: "pi", model: "openai/gpt-5" },
+        });
+        const turn = yield* adapter.sendTurn({
+          threadId: asThreadId("thread-pi-follow-up"),
+          input: "start",
+          attachments: [],
+          interactionMode: "default",
+        });
+        setFakeSessionStreaming(fake.session);
+        const followedUp = yield* adapter.followUpTurn!({
+          threadId: asThreadId("thread-pi-follow-up"),
+          input: "after that do this",
+          attachments: [],
+          interactionMode: "default",
+          mentions: [{ name: "notes.md", path: "notes.md" }],
+        });
+        resolvePrompt?.();
+        return { followedUp, turn };
+      }).pipe(Effect.provide(providePiAdapter(fake.runtime))),
+    );
+
+    expect(result.followedUp.turnId).toBe(result.turn.turnId);
+    expect(fake.session.followUp).toHaveBeenCalledWith(
+      ["Referenced files:\n@notes.md", "after that do this"].join("\n\n"),
+      [],
+    );
   });
 
   it("does not let a stale Pi agent_end complete the next accepted turn", async () => {

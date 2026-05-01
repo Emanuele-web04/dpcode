@@ -1514,6 +1514,11 @@ describe("WebSocket Server", () => {
           threadId,
           turnId: asTurnId("provider-turn-steer-1"),
         }),
+      followUpTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-follow-up-1"),
+        }),
       startReview: () => unsupported(),
       forkThread: () => Effect.succeed(null),
       interruptTurn: () => unsupported(),
@@ -1718,6 +1723,11 @@ describe("WebSocket Server", () => {
         Effect.succeed({
           threadId,
           turnId: asTurnId("provider-turn-steer-1"),
+        }),
+      followUpTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-follow-up-1"),
         }),
       startReview: () => unsupported(),
       forkThread: () => Effect.succeed(null),
@@ -1954,6 +1964,11 @@ describe("WebSocket Server", () => {
           threadId,
           turnId: asTurnId("provider-turn-steer-1"),
         }),
+      followUpTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-follow-up-1"),
+        }),
       startReview: () => unsupported(),
       forkThread: () => Effect.succeed(null),
       interruptTurn: () => unsupported(),
@@ -2145,6 +2160,11 @@ describe("WebSocket Server", () => {
         Effect.succeed({
           threadId,
           turnId: asTurnId("provider-turn-steer-1"),
+        }),
+      followUpTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-follow-up-1"),
         }),
       startReview: () => unsupported(),
       forkThread: () => Effect.succeed(null),
@@ -2354,6 +2374,7 @@ describe("WebSocket Server", () => {
       },
       sendTurn: () => unsupported(),
       steerTurn: () => unsupported(),
+      followUpTurn: () => unsupported(),
       startReview: () => unsupported(),
       forkThread: () => Effect.succeed(null),
       interruptTurn: () => unsupported(),

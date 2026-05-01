@@ -844,6 +844,13 @@ const make = Effect.gen(function* () {
             }
           : requestedModelSelection
         : input.modelSelection;
+    const canDispatchNativeFollowUp = Effect.fnUntraced(function* (session: typeof activeSession) {
+      if (session?.status !== "running" || session.activeTurnId === undefined) {
+        return false;
+      }
+      const capabilities = yield* providerService.getCapabilities(session.provider);
+      return capabilities.supportsTurnFollowUp === true;
+    });
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
@@ -890,6 +897,18 @@ const make = Effect.gen(function* () {
       });
     } else if (input.dispatchMode === "steer") {
       yield* providerService.steerTurn({
+        threadId: input.threadId,
+        ...(normalizedInput ? { input: normalizedInput } : {}),
+        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+        ...(effectiveInteractionMode !== undefined
+          ? { interactionMode: effectiveInteractionMode }
+          : {}),
+      });
+    } else if (yield* canDispatchNativeFollowUp(activeSession)) {
+      yield* providerService.followUpTurn({
         threadId: input.threadId,
         ...(normalizedInput ? { input: normalizedInput } : {}),
         ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
@@ -1141,9 +1160,11 @@ const make = Effect.gen(function* () {
         ? { providerOptions: event.payload.providerOptions }
         : {}),
     }).pipe(Effect.forkScoped);
+    const activeProviderName = thread.session?.providerName ?? thread.modelSelection.provider;
     const immediateDispatchMode =
       event.payload.dispatchMode === "steer" &&
-      (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
+      activeProviderName !== "codex" &&
+      activeProviderName !== "pi"
         ? "queue"
         : event.payload.dispatchMode;
     const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);

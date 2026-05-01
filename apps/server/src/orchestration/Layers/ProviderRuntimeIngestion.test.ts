@@ -69,6 +69,7 @@ function createProviderServiceHarness() {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
     steerTurn: () => unsupported(),
+    followUpTurn: () => unsupported(),
     startReview: () => unsupported(),
     forkThread: () => Effect.succeed(null),
     interruptTurn: () => unsupported(),

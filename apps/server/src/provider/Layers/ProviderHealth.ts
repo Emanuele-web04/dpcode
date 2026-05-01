@@ -648,8 +648,6 @@ const runGeminiCommand = (args: ReadonlyArray<string>) => runSimpleProviderComma
 const runOpenCodeCommand = (args: ReadonlyArray<string>) =>
   runSimpleProviderCommand("opencode", args);
 
-const runPiCommand = (args: ReadonlyArray<string>) => runSimpleProviderCommand("pi", args);
-
 // ── Health check ────────────────────────────────────────────────────
 
 export const checkCodexProviderStatus: Effect.Effect<
@@ -1150,55 +1148,9 @@ function hasPiCredentialEnv(): boolean {
 export const checkPiProviderStatus: Effect.Effect<
   ServerProviderStatus,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path
 > = Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
-
-  const versionProbe = yield* runPiCommand(["--version"]).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
-
-  if (Result.isFailure(versionProbe)) {
-    const error = versionProbe.failure;
-    return {
-      provider: PI_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: isCommandMissingCause(error)
-        ? "Pi CLI (`pi`) is not installed or not on PATH."
-        : `Failed to execute Pi CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-    } satisfies ServerProviderStatus;
-  }
-
-  if (Option.isNone(versionProbe.success)) {
-    return {
-      provider: PI_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "Pi CLI is installed but failed to run. Timed out while running command.",
-    } satisfies ServerProviderStatus;
-  }
-
-  const version = versionProbe.success.value;
-  if (version.code !== 0) {
-    const detail = detailFromResult(version);
-    return {
-      provider: PI_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: detail
-        ? `Pi CLI is installed but failed to run. ${detail}`
-        : "Pi CLI is installed but failed to run.",
-    } satisfies ServerProviderStatus;
-  }
-
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const authHome = process.env.HOME?.trim() || OS.homedir();
@@ -1214,7 +1166,7 @@ export const checkPiProviderStatus: Effect.Effect<
     checkedAt,
     ...(authenticated
       ? {}
-      : { message: "Pi CLI is installed. Configure provider credentials in Pi as needed." }),
+      : { message: "Pi SDK is available. Configure provider credentials in Pi as needed." }),
   } satisfies ServerProviderStatus;
 });
 

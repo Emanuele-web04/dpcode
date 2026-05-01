@@ -4092,10 +4092,7 @@ export default function Sidebar() {
           onDragStart={(event) => {
             const dragImage = event.currentTarget as HTMLElement | null;
             event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData(
-              THREAD_DRAG_MIME,
-              JSON.stringify({ threadId: thread.id }),
-            );
+            event.dataTransfer.setData(THREAD_DRAG_MIME, JSON.stringify({ threadId: thread.id }));
             if (dragImage) {
               const rect = dragImage.getBoundingClientRect();
               event.dataTransfer.setDragImage(

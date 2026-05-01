@@ -159,6 +159,12 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-steer-1"),
       }),
     );
+    const followUpTurn = vi.fn((_: unknown) =>
+      Effect.succeed({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-follow-up-1"),
+      }),
+    );
     const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
       Effect.succeed(null),
     );
@@ -262,6 +268,7 @@ describe("ProviderCommandReactor", () => {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
+      followUpTurn: followUpTurn as ProviderServiceShape["followUpTurn"],
       startReview: unsupported as ProviderServiceShape["startReview"],
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
@@ -275,9 +282,10 @@ describe("ProviderCommandReactor", () => {
         ProviderServiceShape["clearSessionResumeCursor"]
       >,
       listSessions: () => Effect.succeed(runtimeSessions),
-      getCapabilities: (_provider) =>
+      getCapabilities: (provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          ...(provider === "pi" ? { supportsTurnFollowUp: true, supportsTurnSteering: true } : {}),
         }),
       rollbackConversation,
       compactThread: () => unsupported(),
@@ -348,6 +356,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       steerTurn,
+      followUpTurn,
       forkThread,
       interruptTurn,
       respondToRequest,
@@ -362,6 +371,7 @@ describe("ProviderCommandReactor", () => {
       publishBranch,
       generateBranchName,
       generateThreadTitle,
+      runtimeSessions,
       stateDir,
       drain,
       emitRuntimeEvent,
@@ -1382,6 +1392,74 @@ describe("ProviderCommandReactor", () => {
     expect(harness.steerTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "pivot now",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    });
+  });
+
+  it("dispatches Pi queue messages as provider-native follow-ups while running", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "pi",
+        model: "openai/gpt-5",
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-follow-up-pi"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "pi",
+          runtimeMode: "full-access",
+          activeTurnId: asTurnId("turn-running"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.runtimeSessions.push({
+      provider: "pi",
+      status: "running",
+      runtimeMode: "full-access",
+      model: "openai/gpt-5",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activeTurnId: asTurnId("turn-running"),
+      createdAt: now,
+      updatedAt: now,
+    });
+    await harness.drain();
+    harness.sendTurn.mockClear();
+    harness.followUpTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-follow-up-pi"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-follow-up-pi"),
+          role: "user",
+          text: "do this next",
+          attachments: [],
+        },
+        dispatchMode: "queue",
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.followUpTurn.mock.calls.length === 1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.followUpTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "do this next",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
     });
   });
