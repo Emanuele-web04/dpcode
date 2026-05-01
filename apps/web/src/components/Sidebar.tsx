@@ -5094,18 +5094,8 @@ export default function Sidebar() {
     </Tooltip>
   );
 
-  const titlebarControls = (
-    <div className="hidden shrink-0 items-center gap-0.5 md:flex">
-      <AppNavigationButtons className="ms-0" />
-      <SidebarTrigger
-        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
-        aria-label="Toggle thread sidebar"
-      />
-    </div>
-  );
-
-  const headerControls = (
-    <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
+  const desktopSidebarControls = (
+    <div className="hidden shrink-0 items-center gap-0.5 md:flex [-webkit-app-region:no-drag]">
       <AppNavigationButtons className="ms-0" />
       <SidebarTrigger
         className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
@@ -5118,26 +5108,34 @@ export default function Sidebar() {
     <div className="flex w-full items-center gap-1.5">
       <SidebarTrigger className="shrink-0 md:hidden" />
       {brandWordmark}
-      {headerControls}
+      <div className="ml-auto">{desktopSidebarControls}</div>
     </div>
   );
 
-  const sidebarBrand = <div className="flex min-w-0 px-4 pt-3 pb-2">{brandWordmark}</div>;
+  const sidebarBrand = (
+    <div className="drag-region flex min-w-0 items-center gap-1.5 px-4 pt-3 pb-2">
+      {brandWordmark}
+      <div className="ml-auto">{desktopSidebarControls}</div>
+    </div>
+  );
+
+  const settingsBackToAppButton = (
+    <SidebarMenuButton
+      size="default"
+      className={cn(
+        "h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)] hover:text-foreground",
+        isElectron && "[-webkit-app-region:no-drag]",
+      )}
+      onClick={() => handleSidebarViewChange("threads")}
+    >
+      <ArrowLeftIcon className="size-[15px]" />
+      <span>Back to app</span>
+    </SidebarMenuButton>
+  );
 
   return (
     <>
-      {isElectron ? (
-        <>
-          <SidebarHeader
-            className={cn(
-              "drag-region h-[48px] flex-row items-center gap-2 px-4 py-0 font-system-ui",
-              appSettings.sidebarSide === "left" && "pl-[90px]",
-            )}
-          >
-            {titlebarControls}
-          </SidebarHeader>
-        </>
-      ) : (
+      {isElectron ? null : (
         <SidebarHeader className="gap-3 px-3 py-2.5 font-system-ui sm:gap-2.5 sm:px-4 sm:py-3">
           {wordmark}
         </SidebarHeader>
@@ -5171,18 +5169,16 @@ export default function Sidebar() {
         ) : null}
         {isOnSettings ? (
           <SidebarGroup className="px-1.5 py-1.5">
-            <SidebarMenu className="gap-0.5">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  size="default"
-                  className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)] hover:text-foreground"
-                  onClick={() => handleSidebarViewChange("threads")}
-                >
-                  <ArrowLeftIcon className="size-[15px]" />
-                  <span>Back to app</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
+            {isElectron ? (
+              <div className="drag-region flex items-center gap-2 px-0.5 pt-3 pb-1.5">
+                <div className="min-w-0 flex-1">{settingsBackToAppButton}</div>
+                {desktopSidebarControls}
+              </div>
+            ) : (
+              <SidebarMenu className="gap-0.5">
+                <SidebarMenuItem>{settingsBackToAppButton}</SidebarMenuItem>
+              </SidebarMenu>
+            )}
 
             <div className="-mx-1.5 my-1.5 h-px bg-border/70" />
             <div className="space-y-4 pt-2">

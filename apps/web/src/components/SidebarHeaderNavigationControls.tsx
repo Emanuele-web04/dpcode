@@ -15,7 +15,7 @@ export function SidebarHeaderNavigationControls() {
   }
 
   return (
-    <div className="flex shrink-0 items-center gap-0.5">
+    <div className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]">
       <AppNavigationButtons className="ms-0" />
       <SidebarHeaderTrigger className="size-7 shrink-0" />
     </div>
