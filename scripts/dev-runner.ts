@@ -165,8 +165,10 @@ export function createDevRunnerEnv({
 
     if (authToken !== undefined) {
       output.T3CODE_AUTH_TOKEN = authToken;
+      output.DPCODE_AUTH_TOKEN = authToken;
     } else {
       delete output.T3CODE_AUTH_TOKEN;
+      delete output.DPCODE_AUTH_TOKEN;
     }
 
     if (noBrowser !== undefined) {
@@ -492,7 +494,7 @@ const devRunnerCli = Command.make("dev-runner", {
   authToken: Flag.string("auth-token").pipe(
     Flag.withDescription("Auth token (forwards to T3CODE_AUTH_TOKEN)."),
     Flag.withAlias("token"),
-    Flag.withFallbackConfig(optionalStringConfig("T3CODE_AUTH_TOKEN")),
+    Flag.optional,
   ),
   noBrowser: Flag.boolean("no-browser").pipe(
     Flag.withDescription("Browser auto-open toggle (equivalent to T3CODE_NO_BROWSER)."),

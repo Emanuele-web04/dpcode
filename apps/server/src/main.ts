@@ -177,7 +177,11 @@ const ServerConfigLive = (input: CliInput) =>
       );
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
       const noBrowser = resolveBooleanFlag(input.noBrowser, env.noBrowser ?? mode === "desktop");
-      const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      // Web/dev mode is the local browser-facing development path. Keep it
+      // unauthenticated so the browser can connect without requiring a token
+      // from shell environment leakage or manual bootstrap.
+      const authToken =
+        devUrl !== undefined ? undefined : Option.getOrUndefined(input.authToken) ?? env.authToken;
       const autoBootstrapProjectFromCwd = resolveBooleanFlag(
         input.autoBootstrapProjectFromCwd,
         env.autoBootstrapProjectFromCwd ?? mode === "web",

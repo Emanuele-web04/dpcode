@@ -43,6 +43,7 @@ import Migration0027 from "./Migrations/027_BackfillProjectionThreadShellSummary
 import Migration0028 from "./Migrations/028_ProjectionProjectsKind.ts";
 import Migration0029 from "./Migrations/029_ProjectionThreadsLastKnownPr.ts";
 import Migration0030 from "./Migrations/030_ProjectionThreadMessagesDispatchMode.ts";
+import Migration0031 from "./Migrations/031_ProjectionThreadsCreateBranchFlowCompleted.ts";
 import Migration0032 from "./Migrations/032_ReconcileLegacyT3SchemaImport.ts";
 import Migration0033 from "./Migrations/033_AuthAccessManagement.ts";
 

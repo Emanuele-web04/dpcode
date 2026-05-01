@@ -280,7 +280,6 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
-  if (
   if (hasOwn(patch, "geminiBinaryPath") || hasOwn(patch, "customGeminiModels")) {
     providers.gemini = {
       ...(hasOwn(patch, "geminiBinaryPath") ? { binaryPath: patch.geminiBinaryPath ?? "" } : {}),
