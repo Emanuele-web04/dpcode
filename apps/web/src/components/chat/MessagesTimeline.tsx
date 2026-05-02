@@ -24,6 +24,7 @@ import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
+  CameraIcon,
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
@@ -38,6 +39,10 @@ import {
   Undo2Icon,
   ZapIcon,
 } from "~/lib/icons";
+import {
+  type GeneratedImageArtifact,
+  extractGeneratedImageArtifacts,
+} from "~/lib/generatedImageArtifacts";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -665,6 +670,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.message.streaming,
           });
+          const generatedImageArtifacts = extractGeneratedImageArtifacts({
+            text: row.message.text ?? "",
+            workspaceRoot,
+            messageId: row.message.id,
+          });
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -748,6 +758,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={chatTypographyStyle}
                   />
                 </div>
+                {generatedImageArtifacts.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {generatedImageArtifacts.map((artifact) => (
+                      <GeneratedImageArtifactCard
+                        key={artifact.id}
+                        artifact={artifact}
+                        onOpen={(artifact) => {
+                          onImageExpand({
+                            images: [
+                              {
+                                name: artifact.name,
+                                src: artifact.previewUrl,
+                              },
+                            ],
+                            index: 0,
+                          });
+                        }}
+                        onTimelineImageLoad={onTimelineImageLoad}
+                      />
+                    ))}
+                  </div>
+                )}
                 {visibleRenderableInlineToolEntries.length > 0 && (
                   <div className="mt-2.5">
                     <div className="space-y-px">
@@ -1209,6 +1241,46 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
           />
         </div>
       )}
+    </button>
+  );
+});
+
+const GeneratedImageArtifactCard = memo(function GeneratedImageArtifactCard(props: {
+  artifact: GeneratedImageArtifact;
+  onOpen: (artifact: GeneratedImageArtifact) => void;
+  onTimelineImageLoad: () => void;
+}) {
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
+  return (
+    <button
+      type="button"
+      className="group flex min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card/80 text-left shadow-sm transition-colors hover:bg-card"
+      onClick={() => props.onOpen(props.artifact)}
+      title={props.artifact.path}
+    >
+      <div className="flex size-24 shrink-0 items-center justify-center overflow-hidden bg-black/5 dark:bg-white/5">
+        {imageLoadFailed ? (
+          <CameraIcon className="size-5 text-muted-foreground/55" />
+        ) : (
+          <img
+            src={props.artifact.previewUrl}
+            alt=""
+            className="size-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+            loading="lazy"
+            onLoad={props.onTimelineImageLoad}
+            onError={() => {
+              setImageLoadFailed(true);
+              props.onTimelineImageLoad();
+            }}
+          />
+        )}
+      </div>
+      <div className="min-w-0 px-3 py-2.5">
+        <div className="truncate font-medium text-sm">{props.artifact.name}</div>
+        <div className="mt-1 line-clamp-2 text-muted-foreground text-xs leading-snug">
+          {props.artifact.path}
+        </div>
+      </div>
     </button>
   );
 });

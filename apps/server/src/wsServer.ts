@@ -140,6 +140,19 @@ const isServerNotRunningError = (error: Error): boolean => {
   );
 };
 
+const WORKSPACE_IMAGE_PREVIEW_ROUTE = "/workspace-image-preview";
+const CODEX_TEMP_WORKSPACES_DIR_NAME = "dpcode-codex-workspaces";
+const PREVIEW_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+function isPathWithinRoot(input: { candidate: string; root: string; path: Path.Path }): boolean {
+  const candidate = input.path.normalize(input.candidate);
+  const root = input.path.normalize(input.root);
+  return (
+    candidate === root ||
+    candidate.startsWith(root.endsWith(input.path.sep) ? root : `${root}${input.path.sep}`)
+  );
+}
+
 const parseManagedWorktreeWorkspaceRoot = (input: {
   gitPointerFileContents: string;
   path: Path.Path;
@@ -1007,6 +1020,94 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         }
 
         if (tryHandleProjectFaviconRequest(url, res)) {
+          return;
+        }
+
+        if (url.pathname === WORKSPACE_IMAGE_PREVIEW_ROUTE) {
+          const cwd = url.searchParams.get("cwd")?.trim();
+          const rawPath = url.searchParams.get("path")?.trim();
+          if (!cwd || !rawPath || rawPath.includes("\0")) {
+            respond(400, { "Content-Type": "text/plain" }, "Invalid image preview path");
+            return;
+          }
+
+          const expandedCwd = expandHomePath(cwd);
+          const resolvedCwd = path.resolve(expandedCwd);
+          const resolvedImagePath = path.isAbsolute(rawPath)
+            ? path.resolve(expandHomePath(rawPath))
+            : path.resolve(resolvedCwd, rawPath);
+          const allowedRoots = [
+            resolvedCwd,
+            serverConfig.baseDir,
+            path.join(OS.tmpdir(), CODEX_TEMP_WORKSPACES_DIR_NAME),
+          ].map((root) => path.resolve(root));
+          if (
+            !allowedRoots.some((root) =>
+              isPathWithinRoot({ candidate: resolvedImagePath, root, path }),
+            )
+          ) {
+            respond(400, { "Content-Type": "text/plain" }, "Invalid image preview path");
+            return;
+          }
+
+          const contentType = Mime.getType(resolvedImagePath) ?? "application/octet-stream";
+          if (!PREVIEW_IMAGE_MIME_TYPES.has(contentType)) {
+            respond(415, { "Content-Type": "text/plain" }, "Unsupported image type");
+            return;
+          }
+
+          const fileInfo = yield* fileSystem
+            .stat(resolvedImagePath)
+            .pipe(Effect.catch(() => Effect.succeed(null)));
+          if (!fileInfo || fileInfo.type !== "File") {
+            respond(404, { "Content-Type": "text/plain" }, "Not Found");
+            return;
+          }
+
+          const realRoot = yield* Effect.sync(() => {
+            try {
+              return realpathSync(resolvedCwd);
+            } catch {
+              return null;
+            }
+          });
+          const realImagePath = yield* Effect.sync(() => {
+            try {
+              return realpathSync(resolvedImagePath);
+            } catch {
+              return null;
+            }
+          });
+          if (
+            !realImagePath ||
+            (realRoot && !isPathWithinRoot({ candidate: realImagePath, root: realRoot, path }))
+          ) {
+            respond(400, { "Content-Type": "text/plain" }, "Invalid image preview path");
+            return;
+          }
+
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Cache-Control": "private, max-age=60",
+          });
+          const streamExit = yield* Stream.runForEach(
+            fileSystem.stream(resolvedImagePath),
+            (chunk) =>
+              Effect.sync(() => {
+                if (!res.destroyed) {
+                  res.write(chunk);
+                }
+              }),
+          ).pipe(Effect.exit);
+          if (Exit.isFailure(streamExit)) {
+            if (!res.destroyed) {
+              res.destroy();
+            }
+            return;
+          }
+          if (!res.writableEnded) {
+            res.end();
+          }
           return;
         }
 
