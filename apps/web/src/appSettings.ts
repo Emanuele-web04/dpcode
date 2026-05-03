@@ -39,7 +39,8 @@ type CustomModelSettingsKey =
   | "customCodexModels"
   | "customClaudeModels"
   | "customGeminiModels"
-  | "customOpenCodeModels";
+  | "customOpenCodeModels"
+  | "customPiModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -55,6 +56,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+  pi: new Set(getModelOptions("pi").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -78,6 +80,7 @@ export const AppSettingsSchema = Schema.Struct({
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
@@ -103,6 +106,7 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
@@ -149,6 +153,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     defaultSettingsKey: "customOpenCodeModels",
     title: "OpenCode",
     description: "Save additional OpenCode model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "openai/gpt-5",
+  },
+  pi: {
+    provider: "pi",
+    settingsKey: "customPiModels",
+    defaultSettingsKey: "customPiModels",
+    title: "Pi",
+    description: "Save additional Pi model slugs for the picker and provider runtime.",
     placeholder: "provider/model",
     example: "openai/gpt-5",
   },
@@ -201,6 +214,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
+    customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
   };
 }
 
@@ -239,6 +253,7 @@ export function getCustomModelsByProvider(
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
+    pi: getCustomModelsForProvider(settings, "pi"),
   };
 }
 
@@ -336,6 +351,7 @@ export function getCustomModelOptionsByProvider(
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
+    pi: getAppModelOptions("pi", customModelsByProvider.pi),
   };
 }
 
@@ -347,6 +363,7 @@ export function getProviderStartOptions(
     | "codexHomePath"
     | "geminiBinaryPath"
     | "openCodeBinaryPath"
+    | "piBinaryPath"
     | "openCodeServerPassword"
     | "openCodeServerUrl"
   >,
@@ -385,6 +402,13 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(settings.piBinaryPath
+      ? {
+          pi: {
+            binaryPath: settings.piBinaryPath,
+          },
+        }
+      : {}),
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
@@ -393,7 +417,11 @@ export function getProviderStartOptions(
 export function getCustomBinaryPathForProvider(
   settings: Pick<
     AppSettings,
-    "claudeBinaryPath" | "codexBinaryPath" | "geminiBinaryPath" | "openCodeBinaryPath"
+    | "claudeBinaryPath"
+    | "codexBinaryPath"
+    | "geminiBinaryPath"
+    | "openCodeBinaryPath"
+    | "piBinaryPath"
   >,
   provider: ProviderKind,
 ): string {
@@ -406,6 +434,8 @@ export function getCustomBinaryPathForProvider(
       return settings.geminiBinaryPath;
     case "opencode":
       return settings.openCodeBinaryPath;
+    case "pi":
+      return settings.piBinaryPath;
   }
 }
 

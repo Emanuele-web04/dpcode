@@ -111,7 +111,7 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon, PiLogo } from "./Icons";
 import { AppNavigationButtons } from "./AppNavigationButtons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -367,6 +367,9 @@ function ProviderGlyph({ provider, className }: { provider: ProviderKind; classN
     return (
       <OpenCodeIcon aria-hidden="true" className={cn("text-muted-foreground/70", className)} />
     );
+  }
+  if (provider === "pi") {
+    return <PiLogo aria-hidden="true" className={cn("text-muted-foreground/70", className)} />;
   }
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", className)} />;
 }

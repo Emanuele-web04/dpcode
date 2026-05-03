@@ -13,6 +13,7 @@ import {
   type ModelSelection,
   type ModelSlug,
   type OpenCodeModelOptions,
+  type PiModelOptions,
   type ProviderKind,
   CodexReasoningEffort,
 } from "@t3tools/contracts";
@@ -22,7 +23,9 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
+  pi: new Set(MODEL_OPTIONS_BY_PROVIDER.pi.map((option) => option.slug)),
 };
+const RUNTIME_MODEL_PROVIDERS = new Set<ProviderKind>(["opencode", "pi"]);
 
 export interface SelectableModelOption {
   slug: string;
@@ -275,6 +278,9 @@ export function getModelCapabilities(
   if (provider === "gemini") {
     return geminiCapabilitiesForModel(slug ?? model, EMPTY_MODEL_CAPABILITIES);
   }
+  if (provider === "pi") {
+    return MODEL_CAPABILITIES_INDEX.pi[DEFAULT_MODEL_BY_PROVIDER.pi] ?? EMPTY_MODEL_CAPABILITIES;
+  }
   return EMPTY_MODEL_CAPABILITIES;
 }
 
@@ -346,7 +352,8 @@ export function resolveModelSlug(
     return DEFAULT_MODEL_BY_PROVIDER[provider];
   }
 
-  return MODEL_SLUG_SET_BY_PROVIDER[provider].has(normalized)
+  return RUNTIME_MODEL_PROVIDERS.has(provider) ||
+    MODEL_SLUG_SET_BY_PROVIDER[provider].has(normalized)
     ? normalized
     : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
@@ -464,6 +471,19 @@ export function normalizeOpenCodeModelOptions(
     ...(agent ? { agent } : {}),
   };
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+}
+
+export function normalizePiModelOptions(
+  model: string | null | undefined,
+  modelOptions: PiModelOptions | null | undefined,
+): PiModelOptions | undefined {
+  const caps = getModelCapabilities("pi", model);
+  const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
+  if (!thinkingLevel || !hasEffortLevel(caps, thinkingLevel)) {
+    return undefined;
+  }
+  const defaultThinkingLevel = getDefaultEffort(caps);
+  return thinkingLevel !== defaultThinkingLevel ? { thinkingLevel } : undefined;
 }
 
 export function applyClaudePromptEffortPrefix(

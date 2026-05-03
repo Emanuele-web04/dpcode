@@ -8,6 +8,7 @@ import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts"
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { GeminiAdapter, GeminiAdapterShape } from "../Services/GeminiAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
@@ -81,6 +82,23 @@ const fakeOpenCodeAdapter: OpenCodeAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakePiAdapter: PiAdapterShape = {
+  provider: "pi",
+  capabilities: { sessionModelSwitch: "in-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
 const layer = it.layer(
   Layer.mergeAll(
     Layer.provide(
@@ -90,6 +108,7 @@ const layer = it.layer(
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
         Layer.succeed(GeminiAdapter, fakeGeminiAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
+        Layer.succeed(PiAdapter, fakePiAdapter),
       ),
     ),
     NodeServices.layer,
@@ -104,13 +123,15 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const claude = yield* registry.getByProvider("claudeAgent");
       const gemini = yield* registry.getByProvider("gemini");
       const opencode = yield* registry.getByProvider("opencode");
+      const pi = yield* registry.getByProvider("pi");
       assert.equal(codex, fakeCodexAdapter);
       assert.equal(claude, fakeClaudeAdapter);
       assert.equal(gemini, fakeGeminiAdapter);
       assert.equal(opencode, fakeOpenCodeAdapter);
+      assert.equal(pi, fakePiAdapter);
 
       const providers = yield* registry.listProviders();
-      assert.deepEqual(providers, ["codex", "claudeAgent", "gemini", "opencode"]);
+      assert.deepEqual(providers, ["codex", "claudeAgent", "gemini", "opencode", "pi"]);
     }),
   );
 

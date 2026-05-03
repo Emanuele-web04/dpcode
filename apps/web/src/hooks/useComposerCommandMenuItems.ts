@@ -45,6 +45,16 @@ type SearchableModelOption = {
   searchUpstreamProvider: string;
 };
 
+export function normalizeSlashSkillQueryForProvider(provider: ProviderKind, query: string): string {
+  if (provider === "pi" && query.trim().toLowerCase().startsWith("skill:")) {
+    return normalizeProviderDiscoveryText(query.trim().slice("skill:".length));
+  }
+  const normalizedQuery = normalizeProviderDiscoveryText(query);
+  return provider === "pi" && normalizedQuery.startsWith("skill ")
+    ? normalizedQuery.slice("skill ".length)
+    : normalizedQuery;
+}
+
 export function useComposerCommandMenuItems(input: {
   composerTrigger: ComposerTrigger | null;
   provider: ProviderKind;
@@ -160,6 +170,7 @@ export function useComposerCommandMenuItems(input: {
 
     if (composerTrigger.kind === "slash-command") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
+      const skillQuery = normalizeSlashSkillQueryForProvider(provider, composerTrigger.query);
       const availableCommands = getAvailableComposerSlashCommands({
         provider,
         supportsFastSlashCommand,
@@ -201,20 +212,23 @@ export function useComposerCommandMenuItems(input: {
           label: `/${command.name}`,
           description: command.description ?? `Run ${provider} native command`,
         }));
-      // For the Claude provider, skills use `/` prefix just like slash commands,
-      // so merge them into the same dropdown.
+      // Claude and Pi skills use slash-style invocation, so merge them into
+      // the same dropdown as provider-native commands.
       const skillItems: ComposerCommandItem[] =
-        provider === "claudeAgent"
+        provider === "claudeAgent" || provider === "pi"
           ? providerSkills
               .filter((skill) => {
-                if (!query) return true;
-                return buildSkillSearchBlob(skill).includes(query);
+                if (!skillQuery) return true;
+                return buildSkillSearchBlob(skill).includes(skillQuery);
               })
               .map((skill) => ({
                 id: `skill:${skill.path}`,
                 type: "skill" as const,
                 skill,
-                label: skill.interface?.displayName ?? skill.name,
+                label:
+                  provider === "pi"
+                    ? `/skill:${skill.name}`
+                    : (skill.interface?.displayName ?? skill.name),
                 description: skill.interface?.shortDescription ?? skill.description ?? skill.path,
               }))
           : [];

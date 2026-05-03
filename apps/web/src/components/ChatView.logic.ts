@@ -232,6 +232,10 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
     return true;
   }
 
+  if (input.selectedProvider === "pi") {
+    return false;
+  }
+
   if (!input.providerModelsLoading) {
     return false;
   }

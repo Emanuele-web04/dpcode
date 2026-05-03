@@ -58,6 +58,7 @@ const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const GEMINI_PROVIDER = "gemini" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
+const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 
 // ── Pure helpers ────────────────────────────────────────────────────
@@ -616,10 +617,10 @@ const runClaudeCommand = (args: ReadonlyArray<string>) =>
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
 
-const runGeminiCommand = (args: ReadonlyArray<string>) =>
+const runSimpleProviderCommand = (binary: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("gemini", [...args], {
+    const command = ChildProcess.make(binary, [...args], {
       shell: process.platform === "win32",
       env: process.env,
     });
@@ -636,37 +637,16 @@ const runGeminiCommand = (args: ReadonlyArray<string>) =>
     );
 
     if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn gemini ENOENT"));
+      return yield* Effect.fail(new Error(`spawn ${binary} ENOENT`));
     }
 
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
+
+const runGeminiCommand = (args: ReadonlyArray<string>) => runSimpleProviderCommand("gemini", args);
 
 const runOpenCodeCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("opencode", [...args], {
-      shell: process.platform === "win32",
-      env: process.env,
-    });
-
-    const child = yield* spawner.spawn(command);
-
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn opencode ENOENT"));
-    }
-
-    return { stdout, stderr, code: exitCode } satisfies CommandResult;
-  }).pipe(Effect.scoped);
+  runSimpleProviderCommand("opencode", args);
 
 // ── Health check ────────────────────────────────────────────────────
 
@@ -1157,6 +1137,39 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+// ── Pi health check ─────────────────────────────────────────────────
+
+function hasPiCredentialEnv(): boolean {
+  return Boolean(
+    process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENROUTER_API_KEY,
+  );
+}
+
+export const checkPiProviderStatus: Effect.Effect<
+  ServerProviderStatus,
+  never,
+  FileSystem.FileSystem | Path.Path
+> = Effect.gen(function* () {
+  const checkedAt = new Date().toISOString();
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const authHome = process.env.HOME?.trim() || OS.homedir();
+  const authFile = path.join(authHome, ".pi", "agent", "auth.json");
+  const hasAuthFile = yield* fs.exists(authFile).pipe(Effect.orElseSucceed(() => false));
+  const authenticated = hasPiCredentialEnv() || hasAuthFile;
+
+  return {
+    provider: PI_PROVIDER,
+    status: "ready" as const,
+    available: true,
+    authStatus: authenticated ? ("authenticated" as const) : ("unknown" as const),
+    checkedAt,
+    ...(authenticated
+      ? {}
+      : { message: "Pi SDK is available. Configure provider credentials in Pi as needed." }),
+  } satisfies ServerProviderStatus;
+});
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses): boolean {
@@ -1196,7 +1209,7 @@ export const ProviderHealthLive = Layer.effect(
     yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
     const cachePathByProvider = new Map(
-      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER, GEMINI_PROVIDER, OPENCODE_PROVIDER].map(
+      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER, GEMINI_PROVIDER, OPENCODE_PROVIDER, PI_PROVIDER].map(
         (provider) =>
           [
             provider,
@@ -1209,7 +1222,13 @@ export const ProviderHealthLive = Layer.effect(
     );
 
     const cachedStatuses: ProviderStatuses = yield* Effect.forEach(
-      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER, GEMINI_PROVIDER, OPENCODE_PROVIDER] as const,
+      [
+        CODEX_PROVIDER,
+        CLAUDE_AGENT_PROVIDER,
+        GEMINI_PROVIDER,
+        OPENCODE_PROVIDER,
+        PI_PROVIDER,
+      ] as const,
       (provider) =>
         readProviderStatusCache(cachePathByProvider.get(provider)!).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1247,6 +1266,7 @@ export const ProviderHealthLive = Layer.effect(
         checkClaude,
         checkGeminiProviderStatus,
         checkOpenCodeProviderStatus,
+        checkPiProviderStatus,
       ],
       {
         concurrency: "unbounded",

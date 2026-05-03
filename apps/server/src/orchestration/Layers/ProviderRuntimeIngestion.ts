@@ -1590,12 +1590,18 @@ const make = Effect.gen(function* () {
         event.type === "turn.completed" ||
         event.type === "turn.aborted"
       ) {
+        const shouldPreserveActiveTurnForStart =
+          activeTurnId !== null && thread.session?.status === "running";
         const nextActiveTurnId =
           event.type === "turn.started"
             ? (eventTurnId ?? null)
             : isTerminalTurnEvent || event.type === "session.exited"
               ? null
-              : activeTurnId;
+              : event.type === "session.started" || event.type === "thread.started"
+                ? shouldPreserveActiveTurnForStart
+                  ? activeTurnId
+                  : null
+                : activeTurnId;
         const status = (() => {
           switch (event.type) {
             case "session.state.changed":
@@ -1611,8 +1617,10 @@ const make = Effect.gen(function* () {
             case "session.started":
             case "thread.started":
               // Provider thread/session start notifications can arrive during an
-              // active turn; preserve turn-running state in that case.
-              return activeTurnId !== null ? "running" : "ready";
+              // active turn; preserve turn-running state only for a session that
+              // is already known to be running. This avoids resurrecting stale
+              // errored/interrupted turn state after a provider reconnects.
+              return shouldPreserveActiveTurnForStart ? "running" : "ready";
           }
         })();
         const lastError =
@@ -1851,7 +1859,7 @@ const make = Effect.gen(function* () {
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
           ? true
-          : activeTurnId === null || eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
+          : eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
 
         if (shouldApplyRuntimeError) {
           yield* orchestrationEngine.dispatch({

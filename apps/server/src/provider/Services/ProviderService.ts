@@ -61,6 +61,13 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
+   * Queue a follow-up prompt in the active provider turn when supported.
+   */
+  readonly followUpTurn: (
+    input: ProviderSteerTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  /**
    * Start a native provider review run when supported by the routed adapter.
    */
   readonly startReview: (

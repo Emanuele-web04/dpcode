@@ -7,6 +7,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
+  checkPiProviderStatus,
   checkOpenCodeProviderStatus,
   hasCustomModelProvider,
   parseAuthStatusFromOutput,
@@ -94,6 +95,37 @@ function withTempCodexHome(configContent?: string) {
     return { tmpDir } as const;
   });
 }
+
+function withEnvVar(name: string, value: string | undefined) {
+  return Effect.acquireRelease(
+    Effect.sync(() => {
+      const original = process.env[name];
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+      return original;
+    }),
+    (original) =>
+      Effect.sync(() => {
+        if (original === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = original;
+        }
+      }),
+  );
+}
+
+const clearPiCredentialEnv = Effect.all(
+  [
+    withEnvVar("OPENAI_API_KEY", undefined),
+    withEnvVar("ANTHROPIC_API_KEY", undefined),
+    withEnvVar("OPENROUTER_API_KEY", undefined),
+  ],
+  { discard: true },
+);
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── checkCodexProviderStatus tests ────────────────────────────────
@@ -235,6 +267,72 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           }),
         ),
       ),
+    );
+  });
+
+  describe("checkPiProviderStatus", () => {
+    it.effect("returns ready when Pi SDK is available and credential env is present", () =>
+      Effect.gen(function* () {
+        yield* clearPiCredentialEnv;
+        yield* withEnvVar("OPENAI_API_KEY", "test-key");
+        const status = yield* checkPiProviderStatus;
+        assert.strictEqual(status.provider, "pi");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+      }),
+    );
+
+    it.effect("does not require a global pi CLI", () =>
+      Effect.gen(function* () {
+        yield* clearPiCredentialEnv;
+        const fs = yield* FileSystem.FileSystem;
+        const tmpHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3-test-pi-home-" });
+        yield* withEnvVar("HOME", tmpHome);
+
+        const status = yield* checkPiProviderStatus;
+        assert.strictEqual(status.provider, "pi");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
+    );
+
+    it.effect("returns unknown auth when no Pi credential source is present", () =>
+      Effect.gen(function* () {
+        yield* clearPiCredentialEnv;
+        const fs = yield* FileSystem.FileSystem;
+        const tmpHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3-test-pi-home-" });
+        yield* withEnvVar("HOME", tmpHome);
+
+        const status = yield* checkPiProviderStatus;
+        assert.strictEqual(status.provider, "pi");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Pi SDK is available. Configure provider credentials in Pi as needed.",
+        );
+      }),
+    );
+
+    it.effect("returns authenticated when the Pi auth file exists", () =>
+      Effect.gen(function* () {
+        yield* clearPiCredentialEnv;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const tmpHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3-test-pi-home-" });
+        yield* fs.makeDirectory(path.join(tmpHome, ".pi", "agent"), { recursive: true });
+        yield* fs.writeFileString(path.join(tmpHome, ".pi", "agent", "auth.json"), "{}");
+        yield* withEnvVar("HOME", tmpHome);
+
+        const status = yield* checkPiProviderStatus;
+        assert.strictEqual(status.provider, "pi");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+      }),
     );
   });
 

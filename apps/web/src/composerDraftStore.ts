@@ -4,6 +4,7 @@ import {
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
   type ModelSlug,
+  type PiThinkingLevel,
   ModelSelection,
   OrchestrationThreadPullRequest,
   ProjectId,
@@ -54,6 +55,13 @@ const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";
+const COMPOSER_MODEL_PROVIDERS = [
+  "codex",
+  "claudeAgent",
+  "gemini",
+  "opencode",
+  "pi",
+] as const satisfies ReadonlyArray<ProviderKind>;
 
 const composerDebouncedStorage = createDebouncedStorage(
   typeof localStorage !== "undefined" ? localStorage : createMemoryStorage(),
@@ -661,7 +669,11 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
-  return value === "codex" || value === "claudeAgent" || value === "gemini" || value === "opencode"
+  return value === "codex" ||
+    value === "claudeAgent" ||
+    value === "gemini" ||
+    value === "opencode" ||
+    value === "pi"
     ? value
     : null;
 }
@@ -714,6 +726,14 @@ function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
           : {}),
       };
+    case "pi":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
+          : {}),
+      };
   }
 }
 
@@ -738,6 +758,10 @@ function normalizeProviderModelOptions(
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
+      : null;
+  const piCandidate =
+    candidate?.pi && typeof candidate.pi === "object"
+      ? (candidate.pi as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -840,7 +864,22 @@ function normalizeProviderModelOptions(
           ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
         }
       : undefined;
-  if (!codex && !claude && !gemini && !opencode) {
+  const piThinkingLevel: PiThinkingLevel | undefined =
+    piCandidate?.thinkingLevel === "off" ||
+    piCandidate?.thinkingLevel === "minimal" ||
+    piCandidate?.thinkingLevel === "low" ||
+    piCandidate?.thinkingLevel === "medium" ||
+    piCandidate?.thinkingLevel === "high" ||
+    piCandidate?.thinkingLevel === "xhigh"
+      ? piCandidate.thinkingLevel
+      : undefined;
+  const pi =
+    piThinkingLevel !== undefined
+      ? {
+          thinkingLevel: piThinkingLevel,
+        }
+      : undefined;
+  if (!codex && !claude && !gemini && !opencode && !pi) {
     return null;
   }
   return {
@@ -848,6 +887,7 @@ function normalizeProviderModelOptions(
     ...(claude ? { claudeAgent: claude } : {}),
     ...(gemini ? { gemini } : {}),
     ...(opencode ? { opencode } : {}),
+    ...(pi ? { pi } : {}),
   };
 }
 
@@ -895,7 +935,9 @@ function normalizeModelSelection(
           ? modelOptions?.gemini
           : provider === "opencode"
             ? modelOptions?.opencode
-            : undefined;
+            : provider === "pi"
+              ? modelOptions?.pi
+              : undefined;
   return makeModelSelection(provider, model, options);
 }
 
@@ -953,7 +995,7 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent", "gemini", "opencode"] as const) {
+    for (const provider of COMPOSER_MODEL_PROVIDERS) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         result[provider] = makeModelSelection(
@@ -1057,7 +1099,7 @@ export function resolvePreferredComposerModelSelection(input: {
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
   const draftProviderWithSelection =
-    (["codex", "claudeAgent", "gemini", "opencode"] as const).find(
+    COMPOSER_MODEL_PROVIDERS.find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
   const preferredProvider =
@@ -2541,7 +2583,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           const base = existing ?? createEmptyThreadDraft();
           const nextMap = { ...base.modelSelectionByProvider };
-          for (const provider of ["codex", "claudeAgent", "gemini", "opencode"] as const) {
+          for (const provider of COMPOSER_MODEL_PROVIDERS) {
             // Only touch providers explicitly present in the input
             if (!normalizedOpts || !(provider in normalizedOpts)) continue;
             const opts = normalizedOpts[provider];

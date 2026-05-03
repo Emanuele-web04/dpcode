@@ -598,7 +598,6 @@ const make = Effect.gen(function* () {
       return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
     }
 
-    const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
     const currentProvider: ProviderKind | undefined = Schema.is(ProviderKind)(
       thread.session?.providerName,
     )
@@ -618,6 +617,10 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const desiredRuntimeMode =
+      desiredModelSelection.provider === "pi"
+        ? "full-access"
+        : (options?.runtimeMode ?? thread.runtimeMode);
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
       projects: readModel.projects,
@@ -652,7 +655,7 @@ const make = Effect.gen(function* () {
           ? { providerOptions: options.providerOptions }
           : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        runtimeMode: desiredRuntimeMode,
+        runtimeMode: desiredModelSelection.provider === "pi" ? "full-access" : desiredRuntimeMode,
       });
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -662,7 +665,7 @@ const make = Effect.gen(function* () {
           threadId,
           status: mapProviderSessionStatusToOrchestrationStatus(session.status),
           providerName: session.provider,
-          runtimeMode: desiredRuntimeMode,
+          runtimeMode: session.provider === "pi" ? "full-access" : desiredRuntimeMode,
           // Provider turn ids are not orchestration turn ids.
           activeTurnId: null,
           lastError: session.lastError ?? null,
@@ -744,7 +747,7 @@ const make = Effect.gen(function* () {
         ...(options?.providerOptions !== undefined
           ? { providerOptions: options.providerOptions }
           : {}),
-        runtimeMode: desiredRuntimeMode,
+        runtimeMode: desiredModelSelection.provider === "pi" ? "full-access" : desiredRuntimeMode,
       });
       if (forked) {
         const forkedSession =
@@ -752,7 +755,7 @@ const make = Effect.gen(function* () {
           ({
             provider: preferredProvider,
             status: "ready",
-            runtimeMode: desiredRuntimeMode,
+            runtimeMode: preferredProvider === "pi" ? "full-access" : desiredRuntimeMode,
             ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
             model: desiredModelSelection.model,
             threadId,
@@ -793,10 +796,25 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const targetModelSelection =
+      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    const isPiTarget = targetModelSelection.provider === "pi";
+    const effectiveInteractionMode =
+      isPiTarget && input.interactionMode === "plan" ? "default" : input.interactionMode;
+    const effectiveRuntimeMode = isPiTarget ? "full-access" : input.runtimeMode;
+    if (isPiTarget && thread.interactionMode !== "default") {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: serverCommandId("pi-interaction-mode-default"),
+        threadId: input.threadId,
+        interactionMode: "default",
+        createdAt: input.createdAt,
+      });
+    }
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-      ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
+      ...(effectiveRuntimeMode !== undefined ? { runtimeMode: effectiveRuntimeMode } : {}),
     });
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
@@ -844,8 +862,7 @@ const make = Effect.gen(function* () {
       activeSession === undefined
         ? "in-session"
         : (yield* providerService.getCapabilities(activeSession.provider)).sessionModelSwitch;
-    const requestedModelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    const requestedModelSelection = targetModelSelection;
     const modelForTurn =
       sessionModelSwitch === "unsupported"
         ? activeSession?.model !== undefined
@@ -855,6 +872,13 @@ const make = Effect.gen(function* () {
             }
           : requestedModelSelection
         : input.modelSelection;
+    const canDispatchNativeFollowUp = Effect.fnUntraced(function* (session: typeof activeSession) {
+      if (session?.status !== "running" || session.activeTurnId === undefined) {
+        return false;
+      }
+      const capabilities = yield* providerService.getCapabilities(session.provider);
+      return capabilities.supportsTurnFollowUp === true;
+    });
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
@@ -907,7 +931,21 @@ const make = Effect.gen(function* () {
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
         ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
         ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+        ...(effectiveInteractionMode !== undefined
+          ? { interactionMode: effectiveInteractionMode }
+          : {}),
+      });
+    } else if (yield* canDispatchNativeFollowUp(activeSession)) {
+      yield* providerService.followUpTurn({
+        threadId: input.threadId,
+        ...(normalizedInput ? { input: normalizedInput } : {}),
+        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+        ...(effectiveInteractionMode !== undefined
+          ? { interactionMode: effectiveInteractionMode }
+          : {}),
       });
     } else {
       yield* captureMessageStartCheckpoint;
@@ -918,7 +956,9 @@ const make = Effect.gen(function* () {
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
         ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
         ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+        ...(effectiveInteractionMode !== undefined
+          ? { interactionMode: effectiveInteractionMode }
+          : {}),
       });
     }
     if (handoffBootstrapText && thread.handoff !== null) {
@@ -1151,9 +1191,11 @@ const make = Effect.gen(function* () {
         ? { providerOptions: event.payload.providerOptions }
         : {}),
     }).pipe(Effect.forkScoped);
+    const activeProviderName = thread.session?.providerName ?? thread.modelSelection.provider;
     const immediateDispatchMode =
       event.payload.dispatchMode === "steer" &&
-      (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
+      activeProviderName !== "codex" &&
+      activeProviderName !== "pi"
         ? "queue"
         : event.payload.dispatchMode;
     const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);

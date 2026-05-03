@@ -164,4 +164,22 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
   });
+
+  it("decodes Pi SDK raw runtime source", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "runtime.error",
+      eventId: "event-pi-raw-source",
+      provider: "pi",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-pi",
+      payload: { message: "boom" },
+      raw: {
+        source: "pi.sdk.event",
+        messageType: "error",
+        payload: { error: "boom" },
+      },
+    });
+
+    expect(parsed.raw?.source).toBe("pi.sdk.event");
+  });
 });

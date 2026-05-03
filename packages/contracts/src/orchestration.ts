@@ -4,6 +4,7 @@ import {
   CodexModelOptions,
   GeminiModelOptions,
   OpenCodeModelOptions,
+  PiModelOptions,
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
@@ -43,7 +44,7 @@ export const ORCHESTRATION_WS_CHANNELS = {
   threadEvent: "orchestration.threadEvent",
 } as const;
 
-export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "gemini", "opencode"]);
+export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "gemini", "opencode", "pi"]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
@@ -88,11 +89,19 @@ export const OpenCodeModelSelection = Schema.Struct({
 });
 export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
+export const PiModelSelection = Schema.Struct({
+  provider: Schema.Literal("pi"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(PiModelOptions),
+});
+export type PiModelSelection = typeof PiModelSelection.Type;
+
 export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   GeminiModelSelection,
   OpenCodeModelSelection,
+  PiModelSelection,
 ]);
 export type ModelSelection = typeof ModelSelection.Type;
 
@@ -117,11 +126,16 @@ export const OpenCodeProviderStartOptions = Schema.Struct({
   serverPassword: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const PiProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   gemini: Schema.optional(GeminiProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
+  pi: Schema.optional(PiProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

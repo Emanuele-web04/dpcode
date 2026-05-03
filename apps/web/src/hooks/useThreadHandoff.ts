@@ -64,9 +64,10 @@ export function useThreadHandoff() {
       const nextThreadId = newThreadId();
       const createdAt = new Date().toISOString();
       const importedMessages = buildThreadHandoffImportedMessages(thread);
-      const importedActivities = buildThreadHandoffImportedActivities(thread);
+      const importedActivities = buildThreadHandoffImportedActivities(thread, targetProvider);
       const { copyTransferableComposerState, stickyModelSelectionByProvider } =
         useComposerDraftStore.getState();
+      const isPiTarget = targetProvider === "pi";
 
       await api.orchestration.dispatchCommand({
         type: "thread.handoff.create",
@@ -81,8 +82,8 @@ export function useThreadHandoff() {
           projectDefaultModelSelection: project.defaultModelSelection,
           stickyModelSelectionByProvider,
         }),
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
+        runtimeMode: isPiTarget ? "full-access" : thread.runtimeMode,
+        interactionMode: isPiTarget ? "default" : thread.interactionMode,
         envMode: thread.envMode ?? (thread.worktreePath ? "worktree" : "local"),
         branch: thread.branch,
         worktreePath: thread.worktreePath,

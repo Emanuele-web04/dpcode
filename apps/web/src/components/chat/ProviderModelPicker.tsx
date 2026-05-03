@@ -23,7 +23,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, Gemini, Icon, OpenAI, OpenCodeIcon, PiLogo } from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -50,6 +50,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   claudeAgent: ClaudeAI,
   gemini: Gemini,
   opencode: OpenCodeIcon,
+  pi: PiLogo,
 };
 
 function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
@@ -95,11 +96,18 @@ function providerIconClassName(
     : fallbackClassName;
 }
 
-const OPENCODE_MODEL_SEARCH_THRESHOLD = 15;
-const OPENCODE_FAVORITE_MODEL_STORAGE_KEY = "dpcode:opencode-favourite-models:v1";
-const OpenCodeFavoriteModelSlugs = Schema.Array(Schema.String);
+const SEARCHABLE_FAVORITE_MODEL_PROVIDERS = new Set<ProviderKind>(["opencode", "pi"]);
+const FAVORITE_MODEL_STORAGE_KEY_BY_PROVIDER = {
+  opencode: "dpcode:opencode-favourite-models:v1",
+  pi: "dpcode:pi-favourite-models:v1",
+} as const satisfies Record<"opencode" | "pi", string>;
+const MODEL_SEARCH_THRESHOLD_BY_PROVIDER = {
+  opencode: 15,
+  pi: 15,
+} as const satisfies Record<"opencode" | "pi", number>;
+const FavoriteModelSlugs = Schema.Array(Schema.String);
 
-function buildOpenCodeModelSearchText(option: ProviderModelOption): string {
+function buildModelSearchText(option: ProviderModelOption): string {
   return [option.name, option.slug, option.upstreamProviderName, option.upstreamProviderId]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
@@ -122,18 +130,27 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const { onOpenChange, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
-  const [openCodeSearchQuery, setOpenCodeSearchQuery] = useState("");
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
-    OPENCODE_FAVORITE_MODEL_STORAGE_KEY,
+    FAVORITE_MODEL_STORAGE_KEY_BY_PROVIDER.opencode,
     [],
-    OpenCodeFavoriteModelSlugs,
+    FavoriteModelSlugs,
   );
-  const deferredOpenCodeSearchQuery = useDeferredValue(openCodeSearchQuery);
+  const [piFavoriteModelSlugs, setPiFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEY_BY_PROVIDER.pi,
+    [],
+    FavoriteModelSlugs,
+  );
+  const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const openCodeFavoriteModelSlugSet = useMemo(
     () => new Set(openCodeFavoriteModelSlugs),
     [openCodeFavoriteModelSlugs],
+  );
+  const piFavoriteModelSlugSet = useMemo(
+    () => new Set(piFavoriteModelSlugs),
+    [piFavoriteModelSlugs],
   );
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
@@ -149,7 +166,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         setUncontrolledMenuOpen(nextOpen);
       }
       if (!nextOpen) {
-        setOpenCodeSearchQuery("");
+        setModelSearchQuery("");
       }
       onOpenChange?.(nextOpen);
     },
@@ -167,9 +184,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     props.onProviderModelChange(provider, resolvedModel);
     setMenuOpen(false);
   };
-  const toggleOpenCodeFavorite = useCallback(
-    (slug: string) => {
-      setOpenCodeFavoriteModelSlugs((current) => {
+  const favoriteSlugSetForProvider = useCallback(
+    (provider: ProviderKind): ReadonlySet<string> =>
+      provider === "pi" ? piFavoriteModelSlugSet : openCodeFavoriteModelSlugSet,
+    [openCodeFavoriteModelSlugSet, piFavoriteModelSlugSet],
+  );
+  const toggleFavoriteModel = useCallback(
+    (provider: ProviderKind, slug: string) => {
+      const setter = provider === "pi" ? setPiFavoriteModelSlugs : setOpenCodeFavoriteModelSlugs;
+      setter((current) => {
         const normalizedCurrent = Array.from(
           new Set(current.filter((entry) => entry.trim().length > 0)),
         );
@@ -178,27 +201,30 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           : [...normalizedCurrent, slug];
       });
     },
-    [setOpenCodeFavoriteModelSlugs],
+    [setOpenCodeFavoriteModelSlugs, setPiFavoriteModelSlugs],
   );
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
     const providerOptions = props.modelOptionsByProvider[provider];
-    const shouldShowOpenCodeSearch =
-      provider === "opencode" && providerOptions.length >= OPENCODE_MODEL_SEARCH_THRESHOLD;
-    const normalizedOpenCodeSearchQuery = deferredOpenCodeSearchQuery.trim().toLowerCase();
+    const isSearchableFavoriteProvider = SEARCHABLE_FAVORITE_MODEL_PROVIDERS.has(provider);
+    const searchThreshold =
+      provider === "opencode" || provider === "pi"
+        ? MODEL_SEARCH_THRESHOLD_BY_PROVIDER[provider]
+        : Number.POSITIVE_INFINITY;
+    const shouldShowSearch = providerOptions.length >= searchThreshold;
+    const normalizedSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
     const filteredOptions =
-      shouldShowOpenCodeSearch && normalizedOpenCodeSearchQuery.length > 0
+      shouldShowSearch && normalizedSearchQuery.length > 0
         ? providerOptions.filter((option) =>
-            buildOpenCodeModelSearchText(option).includes(normalizedOpenCodeSearchQuery),
+            buildModelSearchText(option).includes(normalizedSearchQuery),
           )
         : providerOptions;
-    const groupedOptions =
-      provider === "opencode"
-        ? groupProviderModelOptionsWithFavorites({
-            options: filteredOptions,
-            favoriteSlugs: openCodeFavoriteModelSlugSet,
-          })
-        : groupProviderModelOptions(filteredOptions);
+    const groupedOptions = isSearchableFavoriteProvider
+      ? groupProviderModelOptionsWithFavorites({
+          options: filteredOptions,
+          favoriteSlugs: favoriteSlugSetForProvider(provider),
+        })
+      : groupProviderModelOptions(filteredOptions);
 
     const content =
       groupedOptions.length > 0 ? (
@@ -211,38 +237,39 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               <MenuGroup>
                 {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
                 {group.options.map((modelOption) => {
-                  const isOpenCodeFavorite =
-                    provider === "opencode" && openCodeFavoriteModelSlugSet.has(modelOption.slug);
+                  const isFavorite =
+                    isSearchableFavoriteProvider &&
+                    favoriteSlugSetForProvider(provider).has(modelOption.slug);
                   return (
                     <MenuRadioItem
                       key={`${provider}:${modelOption.slug}`}
                       value={modelOption.slug}
                       onClick={() => setMenuOpen(false)}
                     >
-                      {provider === "opencode" ? (
+                      {isSearchableFavoriteProvider ? (
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="min-w-0 flex-1 truncate">{modelOption.name}</span>
                           <button
                             type="button"
                             aria-label={
-                              isOpenCodeFavorite
+                              isFavorite
                                 ? `Remove ${modelOption.name} from favourites`
                                 : `Add ${modelOption.name} to favourites`
                             }
                             className={cn(
                               "-me-2 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[var(--color-background-elevated-tertiary)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
-                              isOpenCodeFavorite && "text-amber-300 hover:text-amber-200",
+                              isFavorite && "text-amber-300 hover:text-amber-200",
                             )}
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
-                              toggleOpenCodeFavorite(modelOption.slug);
+                              toggleFavoriteModel(provider, modelOption.slug);
                             }}
                             onPointerDown={(event) => {
                               event.stopPropagation();
                             }}
                           >
-                            {isOpenCodeFavorite ? (
+                            {isFavorite ? (
                               <StarFilledIcon aria-hidden="true" className="size-3.5" />
                             ) : (
                               <StarIcon aria-hidden="true" className="size-3.5" />
@@ -264,15 +291,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
       );
 
-    if (!shouldShowOpenCodeSearch) {
+    if (!shouldShowSearch) {
       return content;
     }
 
     return (
       <PickerPanelShell
         searchPlaceholder="Search models or providers"
-        query={openCodeSearchQuery}
-        onQueryChange={setOpenCodeSearchQuery}
+        query={modelSearchQuery}
+        onQueryChange={setModelSearchQuery}
         stopSearchKeyPropagation
         autoFocusSearch
         widthClassName="w-60"

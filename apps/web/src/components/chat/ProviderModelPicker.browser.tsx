@@ -34,6 +34,20 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "OpenAI",
     },
   ],
+  pi: [
+    {
+      slug: "openai/gpt-5",
+      name: "GPT-5",
+      upstreamProviderId: "openai",
+      upstreamProviderName: "OpenAI",
+    },
+    {
+      slug: "anthropic/claude-sonnet-pi",
+      name: "Claude Sonnet Pi",
+      upstreamProviderId: "anthropic",
+      upstreamProviderName: "Anthropic",
+    },
+  ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
 
 const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
@@ -57,6 +71,13 @@ const OPENCODE_FAVORITE_SORT_MODELS = [
     upstreamProviderName: "OpenAI",
   },
 ] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const MANY_PI_MODELS = Array.from({ length: 16 }, (_, index) => ({
+  slug: `${index % 2 === 0 ? "openai" : "anthropic"}/pi-model-${index + 1}` as ModelSlug,
+  name: `${index % 2 === 0 ? "GPT" : "Claude"} Pi ${index + 1}`,
+  upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
+  upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
+})) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
 async function mountPicker(props: {
   provider: ProviderKind;
@@ -267,6 +288,57 @@ describe("ProviderModelPicker", () => {
           element.textContent?.includes("GPT Favorite Sort"),
         ),
       ).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows Pi search when the provider has at least fifteen models and filters by slug", async () => {
+    const mounted = await mountPicker({
+      provider: "pi",
+      model: MANY_PI_MODELS[0]!.slug,
+      lockedProvider: "pi",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        pi: MANY_PI_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByPlaceholder("Search models or providers").fill("pi-model-2");
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Claude Pi 2" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Pi 1" }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("persists Pi favourites separately from OpenCode favourites", async () => {
+    const mounted = await mountPicker({
+      provider: "pi",
+      model: "openai/gpt-5",
+      lockedProvider: "pi",
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("button", { name: "Add Claude Sonnet Pi to favourites" }).click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("OpenAI"));
+        expect(text.indexOf("Claude Sonnet Pi")).toBeLessThan(text.indexOf("OpenAI"));
+      });
+      expect(localStorage.getItem("dpcode:pi-favourite-models:v1")).toContain(
+        "anthropic/claude-sonnet-pi",
+      );
+      expect(localStorage.getItem("dpcode:opencode-favourite-models:v1")).toBeNull();
     } finally {
       await mounted.cleanup();
     }

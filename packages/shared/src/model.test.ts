@@ -20,6 +20,7 @@ import {
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
   normalizeGeminiModelOptions,
+  normalizePiModelOptions,
   normalizeModelSlug,
   resolveApiModelId,
   resolveSelectableModel,
@@ -92,6 +93,18 @@ describe("resolveModelSlug", () => {
     expect(getDefaultModel()).toBe(DEFAULT_MODEL);
     expect(getModelOptions()).toEqual(MODEL_OPTIONS);
     expect(getModelOptions("claudeAgent")).toEqual(MODEL_OPTIONS_BY_PROVIDER.claudeAgent);
+    expect(getModelOptions("pi")).toEqual(MODEL_OPTIONS_BY_PROVIDER.pi);
+    expect(getDefaultModel("pi")).toBe("openai/gpt-5");
+    expect(resolveModelSlugForProvider("pi", "openai/gpt-5")).toBe("openai/gpt-5");
+  });
+
+  it("preserves runtime-discovered provider model slugs", () => {
+    expect(resolveModelSlugForProvider("pi", "anthropic/claude-sonnet-pi")).toBe(
+      "anthropic/claude-sonnet-pi",
+    );
+    expect(resolveModelSlugForProvider("opencode", "anthropic/claude-sonnet-opencode")).toBe(
+      "anthropic/claude-sonnet-opencode",
+    );
   });
 });
 
@@ -213,6 +226,17 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("gemini", "gemini-2.5-flash-lite")).toEqual(["-1", "512"]);
   });
 
+  it("returns Pi thinking levels for the fallback model", () => {
+    expect(getModelCapabilities("pi", "openai/gpt-5").reasoningEffortLevels).toEqual([
+      { value: "off", label: "Off" },
+      { value: "minimal", label: "Minimal" },
+      { value: "low", label: "Low" },
+      { value: "medium", label: "Medium", isDefault: true },
+      { value: "high", label: "High" },
+      { value: "xhigh", label: "Extra High" },
+    ]);
+  });
+
   it("co-locates labels with effort values", () => {
     const levels = getModelCapabilities("claudeAgent", "claude-opus-4-6").reasoningEffortLevels;
     const high = levels.find((l) => l.value === "high");
@@ -232,6 +256,7 @@ describe("getDefaultEffort", () => {
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
     expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-2.5-flash-lite"))).toBe("-1");
+    expect(getDefaultEffort(getModelCapabilities("pi", "openai/gpt-5"))).toBe("medium");
   });
 });
 
@@ -400,6 +425,23 @@ describe("normalizeGeminiModelOptions", () => {
     expect(
       normalizeGeminiModelOptions("gemini-2.5-flash-lite", { thinkingBudget: 0 }),
     ).toBeUndefined();
+  });
+});
+
+describe("normalizePiModelOptions", () => {
+  it("drops default thinking level and preserves non-default supported levels", () => {
+    expect(normalizePiModelOptions("openai/gpt-5", { thinkingLevel: "medium" })).toBeUndefined();
+    expect(normalizePiModelOptions("openai/gpt-5", { thinkingLevel: "high" })).toEqual({
+      thinkingLevel: "high",
+    });
+  });
+
+  it("preserves Pi thinking levels for runtime-discovered model slugs", () => {
+    expect(
+      normalizePiModelOptions("anthropic/claude-sonnet-pi", { thinkingLevel: "high" }),
+    ).toEqual({
+      thinkingLevel: "high",
+    });
   });
 });
 

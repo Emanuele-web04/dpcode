@@ -75,7 +75,7 @@ export function getRuntimeAwareModelCapabilities(input: {
       : staticCapabilities.supportsFastMode;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
   if (
-    (input.provider !== "codex" && input.provider !== "opencode") ||
+    (input.provider !== "codex" && input.provider !== "opencode" && input.provider !== "pi") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {

@@ -21,6 +21,7 @@ import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
 import { makeGeminiAdapterLive } from "./provider/Layers/GeminiAdapter";
 import { makeOpenCodeAdapterLive } from "./provider/Layers/OpenCodeAdapter";
+import { makePiAdapterLive } from "./provider/Layers/PiAdapter";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
 import { ProviderDiscoveryServiceLive } from "./provider/Layers/ProviderDiscoveryService";
@@ -91,12 +92,13 @@ export function makeServerProviderLayer(): Layer.Layer<
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    const piAdapterLayer = makePiAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined);
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
       Layer.provide(geminiAdapterLayer),
-      Layer.provide(geminiAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
+      Layer.provide(piAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
     const providerServiceLayer = makeProviderServiceLive(

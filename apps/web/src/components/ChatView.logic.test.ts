@@ -185,6 +185,21 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
     ).toBe(false);
   });
 
+  it("does not replace Pi controls with a skeleton while runtime model discovery refreshes", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "pi",
+        selectedModel: "openai/gpt-5",
+        persistedModelSelection: {
+          provider: "pi",
+          model: "anthropic/claude-sonnet-pi",
+        },
+        draftModelSelection: null,
+        providerModelsLoading: true,
+      }),
+    ).toBe(false);
+  });
+
   it("prefers an explicit draft selection over persisted thread state", () => {
     expect(
       shouldShowComposerModelBootstrapSkeleton({

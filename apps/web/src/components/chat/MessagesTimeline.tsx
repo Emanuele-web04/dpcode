@@ -27,12 +27,14 @@ import {
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
+  FolderClosedIcon,
   GitHubIcon,
   GlobeIcon,
   HammerIcon,
   type LucideIcon,
   McpIcon,
   QueueArrow,
+  SearchIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -1635,6 +1637,11 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "command") return TerminalIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.requestKind === "file-change") return SquarePenIcon;
+
+  const normalizedToolName = workEntry.toolName?.trim().toLowerCase();
+  if (normalizedToolName === "read") return EyeIcon;
+  if (normalizedToolName === "ls") return FolderClosedIcon;
+  if (normalizedToolName === "find" || normalizedToolName === "grep") return SearchIcon;
 
   if (workEntry.itemType === "command_execution" || workEntry.command) {
     return TerminalIcon;

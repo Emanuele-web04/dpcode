@@ -6,7 +6,7 @@
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 
-const ProviderDiscoveryKind = Schema.Literals(["codex", "claudeAgent", "gemini", "opencode"]);
+const ProviderDiscoveryKind = Schema.Literals(["codex", "claudeAgent", "gemini", "opencode", "pi"]);
 
 export const ProviderSkillInterface = Schema.Struct({
   displayName: Schema.optional(TrimmedNonEmptyString),

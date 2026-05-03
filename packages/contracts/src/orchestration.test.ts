@@ -15,12 +15,17 @@ import {
   OrchestrationProposedPlan,
   OrchestrationSession,
   ProjectCreateCommand,
+  ProviderKind,
+  ProviderStartOptions,
+  ModelSelection,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
 } from "./orchestration";
+import { DEFAULT_MODEL_BY_PROVIDER, PROVIDER_DISPLAY_NAMES } from "./model";
+import { ProviderComposerCapabilities } from "./providerDiscovery";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
@@ -39,6 +44,40 @@ const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpda
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
+const decodeProviderKind = Schema.decodeUnknownEffect(ProviderKind);
+const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
+const decodeProviderStartOptions = Schema.decodeUnknownEffect(ProviderStartOptions);
+const decodeProviderComposerCapabilities = Schema.decodeUnknownEffect(ProviderComposerCapabilities);
+
+it.effect("accepts Pi provider contracts", () =>
+  Effect.gen(function* () {
+    const provider = yield* decodeProviderKind("pi");
+    const modelSelection = yield* decodeModelSelection({
+      provider: "pi",
+      model: "openai/gpt-5",
+      options: { thinkingLevel: "medium" },
+    });
+    const startOptions = yield* decodeProviderStartOptions({
+      pi: { binaryPath: "/usr/local/bin/pi" },
+    });
+    const composerCapabilities = yield* decodeProviderComposerCapabilities({
+      provider: "pi",
+      supportsSkillMentions: false,
+      supportsSkillDiscovery: false,
+      supportsNativeSlashCommandDiscovery: false,
+      supportsPluginMentions: false,
+      supportsPluginDiscovery: false,
+      supportsRuntimeModelList: true,
+    });
+
+    assert.strictEqual(provider, "pi");
+    assert.strictEqual(modelSelection.provider, "pi");
+    assert.deepStrictEqual(startOptions.pi, { binaryPath: "/usr/local/bin/pi" });
+    assert.strictEqual(composerCapabilities.provider, "pi");
+    assert.strictEqual(DEFAULT_MODEL_BY_PROVIDER.pi, "openai/gpt-5");
+    assert.strictEqual(PROVIDER_DISPLAY_NAMES.pi, "Pi");
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {

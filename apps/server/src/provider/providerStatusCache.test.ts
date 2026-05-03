@@ -80,6 +80,20 @@ describe("providerStatusCache", () => {
           checkedAt: "2026-04-15T10:02:00.000Z",
         },
         {
+          provider: "pi",
+          status: "ready",
+          available: true,
+          authStatus: "unknown",
+          checkedAt: "2026-04-15T10:04:00.000Z",
+        },
+        {
+          provider: "opencode",
+          status: "ready",
+          available: true,
+          authStatus: "unknown",
+          checkedAt: "2026-04-15T10:03:00.000Z",
+        },
+        {
           provider: "claudeAgent",
           status: "warning",
           available: true,
@@ -103,6 +117,20 @@ describe("providerStatusCache", () => {
         available: true,
         authStatus: "authenticated",
         checkedAt: "2026-04-15T10:02:00.000Z",
+      },
+      {
+        provider: "opencode",
+        status: "ready",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-04-15T10:03:00.000Z",
+      },
+      {
+        provider: "pi",
+        status: "ready",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-04-15T10:04:00.000Z",
       },
     ]);
   });

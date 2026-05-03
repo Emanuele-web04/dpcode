@@ -34,6 +34,22 @@ const OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT: ProviderModelDescriptor = {
   ],
 };
 
+const PI_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "anthropic/claude-sonnet-pi",
+  name: "Claude Sonnet Pi",
+  upstreamProviderId: "anthropic",
+  upstreamProviderName: "Anthropic",
+  supportedReasoningEfforts: [
+    { value: "off" },
+    { value: "minimal" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+    { value: "xhigh" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
@@ -453,5 +469,47 @@ describe("getComposerProviderState", () => {
 
     expect(picker).not.toBeNull();
     expect(menuContent).not.toBeNull();
+  });
+
+  it("keeps Pi runtime thinking selections on the thinkingLevel field", () => {
+    const state = getComposerProviderState({
+      provider: "pi",
+      model: "anthropic/claude-sonnet-pi",
+      runtimeModel: PI_RUNTIME_MODEL_WITH_REASONING,
+      prompt: "",
+      modelOptions: {
+        pi: {
+          thinkingLevel: "high",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "pi",
+      promptEffort: "high",
+      modelOptionsForDispatch: {
+        thinkingLevel: "high",
+      },
+    });
+  });
+
+  it("drops explicit Pi runtime default thinking levels from dispatch", () => {
+    const state = getComposerProviderState({
+      provider: "pi",
+      model: "anthropic/claude-sonnet-pi",
+      runtimeModel: PI_RUNTIME_MODEL_WITH_REASONING,
+      prompt: "",
+      modelOptions: {
+        pi: {
+          thinkingLevel: "medium",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "pi",
+      promptEffort: "medium",
+      modelOptionsForDispatch: undefined,
+    });
   });
 });

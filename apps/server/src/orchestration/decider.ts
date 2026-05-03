@@ -774,8 +774,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         targetThread.session?.providerName ?? targetThread.modelSelection.provider;
       const isThreadRunning =
         targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
-      const shouldQueue =
-        isThreadRunning && (dispatchMode === "queue" || activeProvider !== "codex");
+      const providerSupportsImmediateDispatch =
+        activeProvider === "pi" || (dispatchMode === "steer" && activeProvider === "codex");
+      const shouldQueue = isThreadRunning && !providerSupportsImmediateDispatch;
       const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",

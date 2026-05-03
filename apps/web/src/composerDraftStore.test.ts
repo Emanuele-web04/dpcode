@@ -124,8 +124,20 @@ function resetComposerDraftStore() {
   });
 }
 
+function getPersistMerge() {
+  const persistApi = useComposerDraftStore.persist as unknown as {
+    getOptions: () => {
+      merge: (
+        persistedState: unknown,
+        currentState: ReturnType<typeof useComposerDraftStore.getState>,
+      ) => ReturnType<typeof useComposerDraftStore.getState>;
+    };
+  };
+  return persistApi.getOptions().merge;
+}
+
 function modelSelection(
-  provider: "codex" | "claudeAgent" | "opencode",
+  provider: ModelSelection["provider"],
   model: string,
   options?: ModelSelection["options"],
 ): ModelSelection {
@@ -503,15 +515,7 @@ describe("composerDraftStore terminal contexts", () => {
   });
 
   it("hydrates persisted terminal contexts without in-memory snapshot text", () => {
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        merge: (
-          persistedState: unknown,
-          currentState: ReturnType<typeof useComposerDraftStore.getState>,
-        ) => ReturnType<typeof useComposerDraftStore.getState>;
-      };
-    };
-    const mergedState = persistApi.getOptions().merge(
+    const mergedState = getPersistMerge()(
       {
         draftsByThreadId: {
           [threadId]: {
@@ -549,15 +553,7 @@ describe("composerDraftStore terminal contexts", () => {
   });
 
   it("sanitizes malformed persisted drafts during merge", () => {
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        merge: (
-          persistedState: unknown,
-          currentState: ReturnType<typeof useComposerDraftStore.getState>,
-        ) => ReturnType<typeof useComposerDraftStore.getState>;
-      };
-    };
-    const mergedState = persistApi.getOptions().merge(
+    const mergedState = getPersistMerge()(
       {
         draftsByThreadId: {
           [threadId]: {
@@ -577,6 +573,37 @@ describe("composerDraftStore terminal contexts", () => {
     expect(mergedState.draftsByThreadId[threadId]).toBeUndefined();
     expect(mergedState.draftThreadsByThreadId).toEqual({});
     expect(mergedState.projectDraftThreadIdByProjectId).toEqual({});
+  });
+
+  it("hydrates legacy Pi model options into provider-scoped selections", () => {
+    const mergedState = getPersistMerge()(
+      {
+        draftsByThreadId: {
+          [threadId]: {
+            prompt: "",
+            attachments: [],
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5.5",
+            },
+            modelOptions: {
+              pi: {
+                thinkingLevel: "xhigh",
+              },
+            },
+          },
+        },
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectId: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    expect(mergedState.draftsByThreadId[threadId]?.modelSelectionByProvider.pi).toEqual(
+      modelSelection("pi", "openai/gpt-5", {
+        thinkingLevel: "xhigh",
+      }),
+    );
   });
 });
 
@@ -1091,7 +1118,7 @@ describe("composerDraftStore modelSelection", () => {
       selectedProvider: "opencode",
       threadModelSelection: modelSelection("opencode", "opencode/gpt-5-nano"),
       projectModelSelection: null,
-      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [], pi: [] },
       availableModelOptionsByProvider: {
         opencode: [{ slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" }],
       },
@@ -1109,7 +1136,7 @@ describe("composerDraftStore modelSelection", () => {
       selectedProvider: "opencode",
       threadModelSelection: modelSelection("opencode", "openai/gpt-5.4"),
       projectModelSelection: null,
-      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [], pi: [] },
       availableModelOptionsByProvider: {
         opencode: [
           { slug: "openai/gpt-5-codex", name: "GPT-5-Codex" },
@@ -1132,7 +1159,7 @@ describe("composerDraftStore modelSelection", () => {
       selectedProvider: "opencode",
       threadModelSelection: null,
       projectModelSelection: null,
-      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [], pi: [] },
       availableModelOptionsByProvider: {
         opencode: [
           { slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" },
@@ -1400,6 +1427,29 @@ describe("composerDraftStore provider-scoped option updates", () => {
     expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
       modelSelection("claudeAgent", "claude-opus-4-7", {
         effort: "xhigh",
+      }),
+    );
+  });
+
+  it("retains Pi thinking level in provider-scoped options", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProviderModelOptions(
+      threadId,
+      "pi",
+      { thinkingLevel: "xhigh" },
+      { model: "anthropic/claude-sonnet-pi", persistSticky: true },
+    );
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.modelSelectionByProvider.pi).toEqual(
+      modelSelection("pi", "anthropic/claude-sonnet-pi", {
+        thinkingLevel: "xhigh",
+      }),
+    );
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.pi).toEqual(
+      modelSelection("pi", "anthropic/claude-sonnet-pi", {
+        thinkingLevel: "xhigh",
       }),
     );
   });

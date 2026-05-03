@@ -5,6 +5,7 @@
 
 import {
   type ModelSlug,
+  type PiThinkingLevel,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
@@ -162,6 +163,17 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeOpenCodeModelOptions(providerOptions);
       break;
     }
+    case "pi": {
+      const providerOptions = modelOptions?.pi;
+      rawEffort = trimOrNull(providerOptions?.thinkingLevel);
+      const defaultThinkingLevel = getDefaultEffort(caps);
+      const thinkingLevel =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultThinkingLevel
+          ? (rawEffort as PiThinkingLevel)
+          : undefined;
+      normalizedOptions = thinkingLevel ? { thinkingLevel } : undefined;
+      break;
+    }
   }
 
   const draftEffort = trimOrNull(rawEffort);
@@ -213,6 +225,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("opencode", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("opencode", input),
+  },
+  pi: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("pi", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("pi", input),
   },
 };
 

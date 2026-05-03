@@ -607,6 +607,61 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return turn;
       });
 
+    const followUpTurn: ProviderServiceShape["followUpTurn"] = (rawInput) =>
+      Effect.gen(function* () {
+        const parsed = yield* decodeInputOrValidationError({
+          operation: "ProviderService.followUpTurn",
+          schema: ProviderSteerTurnInput,
+          payload: rawInput,
+        });
+
+        const input = {
+          ...parsed,
+          attachments: parsed.attachments ?? [],
+        };
+        if (!input.input && input.attachments.length === 0) {
+          return yield* toValidationError(
+            "ProviderService.followUpTurn",
+            "Either input text or at least one attachment is required",
+          );
+        }
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.followUpTurn",
+          allowRecovery: true,
+        });
+        if (
+          !routed.adapter.followUpTurn ||
+          routed.adapter.capabilities.supportsTurnFollowUp !== true
+        ) {
+          return yield* toValidationError(
+            "ProviderService.followUpTurn",
+            `Provider '${routed.adapter.provider}' does not support follow-up queueing.`,
+          );
+        }
+        const turn = yield* routed.adapter.followUpTurn(input);
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          status: "running",
+          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+          runtimePayload: {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            activeTurnId: turn.turnId,
+            lastRuntimeEvent: "provider.followUpTurn",
+            lastRuntimeEventAt: new Date().toISOString(),
+          },
+        });
+        yield* analytics.record("provider.turn.followed_up", {
+          provider: routed.adapter.provider,
+          model: input.modelSelection?.model,
+          interactionMode: input.interactionMode,
+          attachmentCount: input.attachments.length,
+          hasInput: typeof input.input === "string" && input.input.trim().length > 0,
+        });
+        return turn;
+      });
+
     const startReview: ProviderServiceShape["startReview"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -978,6 +1033,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       forkThread,
       sendTurn,
       steerTurn,
+      followUpTurn,
       startReview,
       interruptTurn,
       respondToRequest,

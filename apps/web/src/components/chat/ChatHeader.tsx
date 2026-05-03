@@ -34,7 +34,7 @@ import { readNativeApi } from "~/nativeApi";
 import { resolveEditorIcon } from "../../editorMetadata";
 import { usePreferredEditor } from "../../editorPreferences";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
-import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon, PiLogo } from "../Icons";
 import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
@@ -185,6 +185,9 @@ export const ChatHeader = memo(function ChatHeader({
     }
     if (provider === "opencode") {
       return <OpenCodeIcon className={cn("text-muted-foreground/70", className)} />;
+    }
+    if (provider === "pi") {
+      return <PiLogo className={cn("text-muted-foreground/70", className)} />;
     }
     if (provider === "codex") {
       return <OpenAI className={cn("text-muted-foreground/75", className)} />;

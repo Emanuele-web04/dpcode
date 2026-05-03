@@ -215,6 +215,7 @@ export const AGENT_MENTION_ALIASES_BY_PROVIDER: Record<
   claudeAgent: CLAUDE_AGENT_MENTION_ALIASES,
   gemini: {},
   opencode: OPENCODE_AGENT_MENTION_ALIASES,
+  pi: {},
 } as const satisfies Record<ProviderKind, Record<string, AgentAliasDefinition>>;
 
 // Backward compatibility for legacy call sites that still expect a flat alias table.
@@ -228,6 +229,7 @@ const AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER: Record<ProviderKind, reado
   claudeAgent: ["explore", "review", "build", "plan"],
   gemini: [],
   opencode: [],
+  pi: [],
 };
 
 function mapAgentEntries(input: Record<string, AgentAliasDefinition>): ResolvedAgentAlias[] {

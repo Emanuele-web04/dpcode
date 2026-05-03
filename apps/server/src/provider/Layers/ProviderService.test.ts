@@ -233,14 +233,17 @@ const sleep = (ms: number) =>
 function makeProviderServiceLayer() {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter("claudeAgent");
+  const pi = makeFakeCodexAdapter("pi");
   const registry: typeof ProviderAdapterRegistry.Service = {
     getByProvider: (provider) =>
       provider === "codex"
         ? Effect.succeed(codex.adapter)
         : provider === "claudeAgent"
           ? Effect.succeed(claude.adapter)
-          : Effect.fail(new ProviderUnsupportedError({ provider })),
-    listProviders: () => Effect.succeed(["codex", "claudeAgent"]),
+          : provider === "pi"
+            ? Effect.succeed(pi.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+    listProviders: () => Effect.succeed(["codex", "claudeAgent", "pi"]),
   };
 
   const providerAdapterLayer = Layer.succeed(ProviderAdapterRegistry, registry);
@@ -266,6 +269,7 @@ function makeProviderServiceLayer() {
   return {
     codex,
     claude,
+    pi,
     layer,
   };
 }
@@ -472,6 +476,21 @@ routing.layer("ProviderServiceLive routing", (it) => {
         attachments: [],
       });
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+
+      const piSession = yield* provider.startSession(asThreadId("thread-pi"), {
+        provider: "pi",
+        threadId: asThreadId("thread-pi"),
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({
+        threadId: piSession.threadId,
+        input: "hello pi",
+        attachments: [],
+      });
+      assert.equal(routing.pi.startSession.mock.calls.length, 1);
+      assert.equal(routing.pi.sendTurn.mock.calls.length, 1);
+      yield* provider.stopSession({ threadId: piSession.threadId });
 
       yield* provider.interruptTurn({ threadId: session.threadId });
       assert.deepEqual(routing.codex.interruptTurn.mock.calls, [

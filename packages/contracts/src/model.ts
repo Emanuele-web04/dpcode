@@ -17,11 +17,21 @@ export const GEMINI_THINKING_LEVEL_OPTIONS = ["LOW", "HIGH"] as const;
 export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVEL_OPTIONS)[number];
 export const GEMINI_THINKING_BUDGET_OPTIONS = [-1, 512, 0] as const;
 export type GeminiThinkingBudget = (typeof GEMINI_THINKING_BUDGET_OPTIONS)[number];
+export const PI_THINKING_LEVEL_OPTIONS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
   | GeminiThinkingLevel
-  | `${GeminiThinkingBudget}`;
+  | `${GeminiThinkingBudget}`
+  | PiThinkingLevel;
 
 export const CodexModelOptions = Schema.Struct({
   // Codex runtime discovery can expose early-access effort values outside the built-in enum.
@@ -50,11 +60,17 @@ export const OpenCodeModelOptions = Schema.Struct({
 });
 export type OpenCodeModelOptions = typeof OpenCodeModelOptions.Type;
 
+export const PiModelOptions = Schema.Struct({
+  thinkingLevel: Schema.optional(Schema.Literals(PI_THINKING_LEVEL_OPTIONS)),
+});
+export type PiModelOptions = typeof PiModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
+  pi: Schema.optional(PiModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -346,6 +362,26 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  pi: [
+    {
+      slug: "openai/gpt-5",
+      name: "OpenAI GPT-5",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "off", label: "Off" },
+          { value: "minimal", label: "Minimal" },
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium", isDefault: true },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -357,6 +393,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   claudeAgent: "claude-sonnet-4-6",
   gemini: "auto-gemini-3",
   opencode: "openai/gpt-5",
+  pi: "openai/gpt-5",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -406,6 +443,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
   opencode: {},
+  pi: {},
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -437,4 +475,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   gemini: "Gemini",
   opencode: "OpenCode",
+  pi: "Pi",
 };

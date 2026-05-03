@@ -17,13 +17,15 @@ const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "claudeAgent",
   "gemini",
   "opencode",
+  "pi",
 ];
-const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
+const PROVIDER_BOUND_THREAD_ACTIVITY_KINDS = new Set([
   "account.rate-limits.updated",
   "account.rate-limited",
   "context-window.updated",
   "context-window.configured",
 ]);
+const IMPORTABLE_THREAD_ACTIVITY_KINDS = PROVIDER_BOUND_THREAD_ACTIVITY_KINDS;
 
 function isImportableThreadMessage(
   message: Thread["messages"][number],
@@ -89,14 +91,24 @@ export function buildThreadHandoffImportedMessages(
 }
 
 export function buildThreadHandoffImportedActivities(
-  thread: Pick<Thread, "activities">,
+  thread: Pick<Thread, "activities" | "modelSelection">,
+  targetProvider: ProviderKind,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  return thread.activities.filter(isImportableThreadActivity).map((activity) => {
+  const keepProviderBoundActivities = thread.modelSelection.provider === targetProvider;
+  return thread.activities.flatMap((activity) => {
+    if (!isImportableThreadActivity(activity)) {
+      return [];
+    }
+    if (!keepProviderBoundActivities && PROVIDER_BOUND_THREAD_ACTIVITY_KINDS.has(activity.kind)) {
+      return [];
+    }
     const { sequence: _sequence, ...rest } = activity;
-    return {
-      ...rest,
-      id: EventId.makeUnsafe(randomUUID()),
-    };
+    return [
+      {
+        ...rest,
+        id: EventId.makeUnsafe(randomUUID()),
+      },
+    ];
   });
 }
 

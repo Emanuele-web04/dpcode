@@ -55,6 +55,7 @@ export interface ProviderAdapterCapabilities {
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
   readonly supportsTurnSteering?: boolean;
+  readonly supportsTurnFollowUp?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -93,6 +94,13 @@ export interface ProviderAdapterShape<TError> {
    * Redirect an active turn toward a new prompt when the provider supports it.
    */
   readonly steerTurn?: (
+    input: ProviderSteerTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /**
+   * Queue a follow-up prompt in the active provider turn when supported.
+   */
+  readonly followUpTurn?: (
     input: ProviderSteerTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 

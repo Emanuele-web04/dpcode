@@ -28,6 +28,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "gemini.acp.stdout",
   "gemini.acp.stderr",
   "opencode.sdk.event",
+  "pi.sdk.event",
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;
 
