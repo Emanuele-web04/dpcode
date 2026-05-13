@@ -12,6 +12,7 @@ import * as Path from "node:path";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -29,6 +30,7 @@ import type {
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
+  RemoteSshConnectInput,
 } from "@t3tools/contracts";
 import { autoUpdater } from "electron-updater";
 
@@ -86,6 +88,8 @@ import {
   resolveLegacyDesktopUserDataPaths,
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
+import { RemotePortForwarder } from "./remotePortForwarder";
+import { RemoteSshBackendManager } from "./remoteSshBackend";
 
 syncShellEnvironment();
 
@@ -104,6 +108,10 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
+const CLIPBOARD_READ_IMAGE_CHANNEL = "desktop:clipboard-read-image";
+const REMOTE_SSH_CONNECT_CHANNEL = "desktop:remote-ssh-connect";
+const REMOTE_SSH_DISCONNECT_CHANNEL = "desktop:remote-ssh-disconnect";
+const REMOTE_SSH_GET_STATUS_CHANNEL = "desktop:remote-ssh-get-status";
 const BASE_DIR =
   process.env.DPCODE_HOME?.trim() ||
   process.env.T3CODE_HOME?.trim() ||
@@ -141,6 +149,9 @@ let backendPort = 0;
 let backendAuthToken = "";
 let backendHttpUrl = "";
 let backendWsUrl = "";
+let localBackendHttpUrl = "";
+let localBackendWsUrl = "";
+let activeBackendEndpointKind: "local" | "remote" = "local";
 let backendReadinessAbortController: AbortController | null = null;
 let backendInitialWindowOpenInFlight: Promise<void> | null = null;
 let backendListeningDetector: ServerListeningDetector | null = null;
@@ -155,12 +166,18 @@ let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
+const remoteSshBackendManager = new RemoteSshBackendManager();
+const remotePortForwarder = new RemotePortForwarder();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredGitHubUpdateToken = "";
 
 browserManager.subscribe((state) => {
   sendBrowserState(mainWindow?.webContents, state);
+});
+browserManager.setUrlResolver(remotePortForwarder);
+remoteSshBackendManager.subscribeLifecycle((event) => {
+  handleRemoteSshBackendLifecycle(event.status.message ?? "Remote SSH backend stopped.");
 });
 
 function startBrowserPerformanceLogging(): void {
@@ -335,11 +352,60 @@ async function reserveBackendEndpoint(reason: string): Promise<void> {
     Effect.provide(NetService.layer),
     Effect.runPromise,
   );
-  backendHttpUrl = `http://127.0.0.1:${backendPort}`;
-  backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
-  process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
-  process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
+  localBackendHttpUrl = `http://127.0.0.1:${backendPort}`;
+  localBackendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
+  if (activeBackendEndpointKind === "local") {
+    restoreLocalBackendEndpoint();
+  }
   writeDesktopLogHeader(`${reason} resolved backend endpoint port=${backendPort}`);
+}
+
+function setActiveBackendEndpoint(input: {
+  readonly kind: "local" | "remote";
+  readonly httpUrl: string;
+  readonly wsUrl: string;
+}): void {
+  activeBackendEndpointKind = input.kind;
+  backendHttpUrl = input.httpUrl;
+  backendWsUrl = input.wsUrl;
+  process.env.DPCODE_DESKTOP_WS_URL = input.wsUrl;
+  process.env.T3CODE_DESKTOP_WS_URL = input.wsUrl;
+}
+
+function restoreLocalBackendEndpoint(): void {
+  if (localBackendHttpUrl.length === 0 || localBackendWsUrl.length === 0) {
+    return;
+  }
+  setActiveBackendEndpoint({
+    kind: "local",
+    httpUrl: localBackendHttpUrl,
+    wsUrl: localBackendWsUrl,
+  });
+}
+
+function handleRemoteSshBackendLifecycle(message: string): void {
+  if (isQuitting) {
+    return;
+  }
+  remotePortForwarder.setTarget(null);
+  restoreLocalBackendEndpoint();
+  console.warn(`[desktop] remote SSH backend stopped; restored local backend: ${message}`);
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.reload();
+  }
+
+  if (Notification.isSupported()) {
+    try {
+      new Notification({
+        title: "Remote SSH disconnected",
+        body: "DP Code switched back to the local backend.",
+        silent: false,
+      }).show();
+    } catch {
+      // The endpoint switch and reload above are the reliable recovery path.
+    }
+  }
 }
 
 async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" | "http"> {
@@ -1748,6 +1814,33 @@ function registerIpcHandlers(): void {
     shell.showItemInFolder(resolvedPath);
   });
 
+  ipcMain.removeHandler(REMOTE_SSH_CONNECT_CHANNEL);
+  ipcMain.handle(REMOTE_SSH_CONNECT_CHANNEL, async (_event, input: RemoteSshConnectInput) => {
+    remotePortForwarder.setTarget(null);
+    restoreLocalBackendEndpoint();
+    try {
+      const result = await remoteSshBackendManager.connect(input);
+      setActiveBackendEndpoint({ kind: "remote", httpUrl: result.httpUrl, wsUrl: result.wsUrl });
+      remotePortForwarder.setTarget(result.target);
+      return result;
+    } catch (error) {
+      remotePortForwarder.setTarget(null);
+      restoreLocalBackendEndpoint();
+      throw error;
+    }
+  });
+
+  ipcMain.removeHandler(REMOTE_SSH_DISCONNECT_CHANNEL);
+  ipcMain.handle(REMOTE_SSH_DISCONNECT_CHANNEL, async () => {
+    remotePortForwarder.setTarget(null);
+    const status = await remoteSshBackendManager.disconnect();
+    restoreLocalBackendEndpoint();
+    return status;
+  });
+
+  ipcMain.removeHandler(REMOTE_SSH_GET_STATUS_CHANNEL);
+  ipcMain.handle(REMOTE_SSH_GET_STATUS_CHANNEL, async () => remoteSshBackendManager.getStatus());
+
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
   ipcMain.handle(UPDATE_GET_STATE_CHANNEL, async () => updateState);
 
@@ -1809,6 +1902,24 @@ function registerIpcHandlers(): void {
         ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
       }),
   );
+
+  ipcMain.removeHandler(CLIPBOARD_READ_IMAGE_CHANNEL);
+  ipcMain.handle(CLIPBOARD_READ_IMAGE_CHANNEL, async () => {
+    const image = clipboard.readImage();
+    if (image.isEmpty()) {
+      return null;
+    }
+    const png = image.toPNG();
+    if (png.byteLength === 0) {
+      return null;
+    }
+    return {
+      dataUrl: `data:image/png;base64,${png.toString("base64")}`,
+      mimeType: "image/png" as const,
+      sizeBytes: png.byteLength,
+    };
+  });
+
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   void ensureBrowserUsePipeServer().catch((error) => {
@@ -2028,6 +2139,8 @@ app.on("before-quit", () => {
   void browserUsePipeServer?.dispose().finally(() => {
     browserUsePipeServer = null;
   });
+  remotePortForwarder.dispose();
+  void remoteSshBackendManager.disconnect();
   cancelBackendReadinessWait();
   stopBackend();
   browserManager.dispose();

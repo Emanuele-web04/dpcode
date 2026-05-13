@@ -165,6 +165,30 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+export interface RemoteSshConnectInput {
+  target: string;
+  remoteProjectPath: string;
+  remotePort?: number;
+  startupCommand?: string;
+}
+
+export interface RemoteSshConnectionResult {
+  mode: "remote";
+  target: string;
+  remoteProjectPath: string;
+  httpUrl: string;
+  wsUrl: string;
+}
+
+export interface RemoteSshStatus {
+  mode: "local" | "remote" | "connecting" | "error";
+  target: string | null;
+  remoteProjectPath: string | null;
+  httpUrl: string | null;
+  wsUrl: string | null;
+  message: string | null;
+}
+
 export interface BrowserTabState {
   id: string;
   url: string;
@@ -249,6 +273,12 @@ export interface DesktopNotificationInput {
   threadId?: ThreadId;
 }
 
+export interface DesktopClipboardImageResult {
+  dataUrl: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -278,10 +308,18 @@ export interface DesktopBridge {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
   };
+  clipboard?: {
+    readImage: () => Promise<DesktopClipboardImageResult | null>;
+  };
   server?: {
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
+  };
+  remoteSsh?: {
+    connect: (input: RemoteSshConnectInput) => Promise<RemoteSshConnectionResult>;
+    disconnect: () => Promise<RemoteSshStatus>;
+    getStatus: () => Promise<RemoteSshStatus>;
   };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;

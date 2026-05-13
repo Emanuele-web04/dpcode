@@ -23,6 +23,10 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
+const CLIPBOARD_READ_IMAGE_CHANNEL = "desktop:clipboard-read-image";
+const REMOTE_SSH_CONNECT_CHANNEL = "desktop:remote-ssh-connect";
+const REMOTE_SSH_DISCONNECT_CHANNEL = "desktop:remote-ssh-disconnect";
+const REMOTE_SSH_GET_STATUS_CHANNEL = "desktop:remote-ssh-get-status";
 
 function getDesktopWsUrl(): string | null {
   try {
@@ -75,8 +79,16 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     isSupported: () => ipcRenderer.invoke(NOTIFICATIONS_IS_SUPPORTED_CHANNEL),
     show: (input) => ipcRenderer.invoke(NOTIFICATIONS_SHOW_CHANNEL, input),
   },
+  clipboard: {
+    readImage: () => ipcRenderer.invoke(CLIPBOARD_READ_IMAGE_CHANNEL),
+  },
   server: {
     transcribeVoice: (input) => ipcRenderer.invoke(SERVER_TRANSCRIBE_VOICE_CHANNEL, input),
+  },
+  remoteSsh: {
+    connect: (input) => ipcRenderer.invoke(REMOTE_SSH_CONNECT_CHANNEL, input),
+    disconnect: () => ipcRenderer.invoke(REMOTE_SSH_DISCONNECT_CHANNEL),
+    getStatus: () => ipcRenderer.invoke(REMOTE_SSH_GET_STATUS_CHANNEL),
   },
   browser: {
     open: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.open, input),

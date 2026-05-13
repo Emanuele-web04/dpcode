@@ -2,6 +2,7 @@ import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
   type ClaudeCodeEffort,
+  type DesktopClipboardImageResult,
   MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -388,6 +389,26 @@ function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
         revokeBlobPreviewUrl(previewUrl);
       }
     }, 0);
+  });
+}
+
+function fileFromDesktopClipboardImage(result: DesktopClipboardImageResult): File | null {
+  const commaIndex = result.dataUrl.indexOf(",");
+  if (commaIndex < 0 || !result.dataUrl.slice(0, commaIndex).includes(";base64")) {
+    return null;
+  }
+
+  const binary = window.atob(result.dataUrl.slice(commaIndex + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  if (bytes.byteLength === 0) {
+    return null;
+  }
+
+  return new File([bytes], `clipboard-${Date.now()}.png`, {
+    type: result.mimeType,
   });
 }
 
@@ -4780,15 +4801,41 @@ export default function ChatView({
 
   const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
-    if (files.length === 0) {
+    const itemFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    const pastedFiles = files.length > 0 ? files : itemFiles;
+    if (pastedFiles.length > 0) {
+      const imageFiles = pastedFiles.filter((file) => file.type.startsWith("image/"));
+      if (imageFiles.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      addComposerImages(imageFiles);
       return;
     }
-    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-    if (imageFiles.length === 0) {
+
+    if (!isElectron || event.clipboardData.getData("text").trim().length > 0) {
+      return;
+    }
+    const clipboardBridge = window.desktopBridge?.clipboard;
+    if (!clipboardBridge) {
       return;
     }
     event.preventDefault();
-    addComposerImages(imageFiles);
+    void clipboardBridge
+      .readImage()
+      .then((result) => {
+        if (!result) {
+          return;
+        }
+        const file = fileFromDesktopClipboardImage(result);
+        if (file) {
+          addComposerImages([file]);
+        }
+      })
+      .catch(() => {});
   };
 
   const onComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {

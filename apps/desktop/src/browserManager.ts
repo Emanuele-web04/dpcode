@@ -9,6 +9,7 @@ import {
   BrowserWindow,
   clipboard,
   nativeImage,
+  session as electronSession,
   shell,
   webContents as electronWebContents,
   WebContentsView,
@@ -40,6 +41,15 @@ const BROWSER_ERROR_ABORTED = -3;
 const SEARCH_URL_PREFIX = "https://www.google.com/search?q=";
 
 type BrowserStateListener = (state: ThreadBrowserState) => void;
+
+export interface BrowserResolvedUrl {
+  url: string;
+}
+
+export interface BrowserUrlResolver {
+  resolveUrl(url: string): Promise<BrowserResolvedUrl>;
+  normalizeDisplayUrl(url: string): string;
+}
 
 interface LiveTabRuntime {
   key: string;
@@ -279,9 +289,11 @@ export class DesktopBrowserManager {
   private readonly runtimeLastActiveAtByKey = new Map<string, number>();
   private readonly pendingRuntimeSyncs = new Map<string, PendingRuntimeSync>();
   private readonly listeners = new Set<BrowserStateListener>();
+  private urlResolver: BrowserUrlResolver | null = null;
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   private runtimeSyncFlushScheduled = false;
+  private loopbackRequestResolverInstalled = false;
   private readonly perfCounters = {
     setPanelBoundsCalls: 0,
     setPanelBoundsNoopSkips: 0,
@@ -300,6 +312,7 @@ export class DesktopBrowserManager {
   setWindow(window: BrowserWindow | null): void {
     this.window = window;
     if (window) {
+      this.installLoopbackRequestResolver();
       const bounds = this.activeThreadId
         ? this.getVisibleBoundsForThread(this.activeThreadId)
         : null;
@@ -320,6 +333,41 @@ export class DesktopBrowserManager {
     };
   }
 
+  setUrlResolver(resolver: BrowserUrlResolver | null): void {
+    this.urlResolver = resolver;
+  }
+
+  private normalizeDisplayUrl(url: string): string {
+    return this.urlResolver?.normalizeDisplayUrl(url) ?? url;
+  }
+
+  private installLoopbackRequestResolver(): void {
+    if (this.loopbackRequestResolverInstalled) {
+      return;
+    }
+    this.loopbackRequestResolverInstalled = true;
+    const browserSession = electronSession.fromPartition(BROWSER_SESSION_PARTITION);
+    browserSession.webRequest.onBeforeRequest(
+      { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
+      (details, callback) => {
+        const resolver = this.urlResolver;
+        if (!resolver) {
+          callback({});
+          return;
+        }
+
+        void resolver
+          .resolveUrl(details.url)
+          .then((resolved) => {
+            callback(resolved.url !== details.url ? { redirectURL: resolved.url } : {});
+          })
+          .catch(() => {
+            callback({ cancel: true });
+          });
+      },
+    );
+  }
+
   dispose(): void {
     for (const timer of this.suspendTimers.values()) {
       clearTimeout(timer);
@@ -334,6 +382,7 @@ export class DesktopBrowserManager {
     this.pendingRuntimeSyncs.clear();
     this.runtimeLastActiveAtByKey.clear();
     this.listeners.clear();
+    this.urlResolver = null;
     this.states.clear();
     this.threadVersionById.clear();
     this.snapshotCacheByThreadId.clear();
@@ -517,6 +566,7 @@ export class DesktopBrowserManager {
     }
 
     const existing = this.runtimes.get(key);
+    let adoptedWebContents = false;
     if (existing?.webContents.id !== webContents.id) {
       if (existing) {
         this.destroyRuntime(input.threadId, tab.id);
@@ -532,12 +582,16 @@ export class DesktopBrowserManager {
       };
       this.configureRuntimeWebContents(runtime);
       this.runtimes.set(key, runtime);
+      adoptedWebContents = true;
     }
 
     const bounds = this.getVisibleBoundsForThread(input.threadId);
     const runtime = this.runtimes.get(key);
     if (runtime && bounds) {
       this.attachRuntime(runtime, bounds);
+    }
+    if (runtime && adoptedWebContents) {
+      void this.loadTab(input.threadId, tab.id, { force: true, runtime });
     }
 
     const didChange = tab.status !== LIVE_TAB_STATUS || tab.lastError !== null;
@@ -547,7 +601,9 @@ export class DesktopBrowserManager {
     if (didChange) {
       this.markThreadStateChanged(input.threadId);
     }
-    this.queueRuntimeStateSync(input.threadId, tab.id);
+    if (!adoptedWebContents) {
+      this.queueRuntimeStateSync(input.threadId, tab.id);
+    }
     this.emitState(input.threadId);
     return this.snapshotThreadState(input.threadId, state);
   }
@@ -740,7 +796,7 @@ export class DesktopBrowserManager {
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
     const webContents = runtime.webContents;
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
-    const currentUrl = webContents.getURL();
+    const currentUrl = this.normalizeDisplayUrl(webContents.getURL());
     const bounds = this.getVisibleBoundsForThread(input.threadId);
     if (bounds) {
       this.attachActiveTab(input.threadId, bounds);
@@ -932,7 +988,14 @@ export class DesktopBrowserManager {
       if (wasSuspended) {
         void this.loadTab(threadId, tab.id, { force: true, runtime });
       } else {
-        didChange = syncTabStateFromRuntime(state, tab, runtime.webContents) || didChange;
+        didChange =
+          syncTabStateFromRuntime(
+            state,
+            tab,
+            runtime.webContents,
+            undefined,
+            (url) => this.normalizeDisplayUrl(url),
+          ) || didChange;
       }
     }
 
@@ -1229,10 +1292,15 @@ export class DesktopBrowserManager {
     const { threadId, tabId, webContents } = runtime;
 
     webContents.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL) {
+      const displayUrl = this.normalizeDisplayUrl(url);
+      if (
+        displayUrl.startsWith("http://") ||
+        displayUrl.startsWith("https://") ||
+        displayUrl === ABOUT_BLANK_URL
+      ) {
         this.newTab({
           threadId,
-          url,
+          url: displayUrl,
           activate: true,
         });
         const bounds = this.getVisibleBoundsForThread(threadId);
@@ -1242,7 +1310,7 @@ export class DesktopBrowserManager {
         return { action: "deny" };
       }
 
-      void shell.openExternal(url);
+      void shell.openExternal(displayUrl);
       return { action: "deny" };
     });
 
@@ -1312,7 +1380,7 @@ export class DesktopBrowserManager {
         return;
       }
 
-      tab.url = validatedURL || tab.url;
+      tab.url = validatedURL ? this.normalizeDisplayUrl(validatedURL) : tab.url;
       tab.title = defaultTitleForUrl(tab.url);
       tab.isLoading = false;
       tab.lastError = mapBrowserLoadError(errorCode);
@@ -1361,9 +1429,22 @@ export class DesktopBrowserManager {
 
     const runtime = options.runtime ?? this.ensureLiveRuntime(threadId, tabId);
     const webContents = runtime.webContents;
-    const nextUrl = normalizeUrlInput(
+    const displayUrl = normalizeUrlInput(
       options.force === true ? tab.url : (tab.lastCommittedUrl ?? tab.url),
     );
+    let nextUrl = displayUrl;
+    try {
+      nextUrl = this.urlResolver ? (await this.urlResolver.resolveUrl(displayUrl)).url : displayUrl;
+    } catch {
+      tab.url = displayUrl;
+      tab.status = "live";
+      tab.isLoading = false;
+      tab.lastError = "Couldn't open this page.";
+      syncThreadLastError(state);
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+      return;
+    }
     const currentUrl = webContents.getURL();
     const shouldLoad = options.force === true || currentUrl !== nextUrl || currentUrl.length === 0;
 
@@ -1372,7 +1453,7 @@ export class DesktopBrowserManager {
       return;
     }
 
-    tab.url = nextUrl;
+    tab.url = displayUrl;
     tab.status = "live";
     tab.isLoading = true;
     tab.lastError = null;
@@ -1406,7 +1487,13 @@ export class DesktopBrowserManager {
       return;
     }
 
-    const didChange = syncTabStateFromRuntime(state, tab, runtime.webContents, faviconUrls);
+    const didChange = syncTabStateFromRuntime(
+      state,
+      tab,
+      runtime.webContents,
+      faviconUrls,
+      (url) => this.normalizeDisplayUrl(url),
+    );
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(threadId);
@@ -1673,8 +1760,9 @@ function syncTabStateFromRuntime(
   tab: BrowserTabState,
   webContents: WebContents,
   faviconUrls?: string[],
+  normalizeDisplayUrl: (url: string) => string = (url) => url,
 ): boolean {
-  const currentUrl = webContents.getURL();
+  const currentUrl = normalizeDisplayUrl(webContents.getURL());
   const nextUrl = currentUrl || tab.url;
   const nextTitle = webContents.getTitle();
   let didChange = false;

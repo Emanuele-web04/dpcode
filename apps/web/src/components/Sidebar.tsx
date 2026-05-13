@@ -58,6 +58,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   type ProviderKind,
+  type RemoteSshStatus,
   ThreadId,
   type GitStatusResult,
   type ResolvedKeybindingsConfig,
@@ -268,6 +269,7 @@ const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const THREAD_INTENT_PREWARM_RELEASE_MS = 10_000;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
+const REMOTE_SSH_PENDING_PROJECT_PATH_KEY = "dpcode.remoteSsh.pendingProjectPath";
 const DebugFeatureFlagsMenu = import.meta.env.DEV
   ? lazy(() =>
       import("./DebugFeatureFlagsMenu").then((module) => ({
@@ -1232,8 +1234,14 @@ export default function Sidebar() {
   const [searchPaletteInitialQuery, setSearchPaletteInitialQuery] = useState<string | null>(null);
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [showManualPathInput, setShowManualPathInput] = useState(false);
+  const [showRemoteSshInput, setShowRemoteSshInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
+  const [isConnectingRemoteSsh, setIsConnectingRemoteSsh] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
+  const [remoteSshTarget, setRemoteSshTarget] = useState("");
+  const [remoteSshProjectPath, setRemoteSshProjectPath] = useState("");
+  const [remoteSshStartupCommand, setRemoteSshStartupCommand] = useState("");
+  const [remoteSshStatus, setRemoteSshStatus] = useState<RemoteSshStatus | null>(null);
   const addProjectErrorMeaning = useMemo(
     () => (addProjectError ? describeAddProjectError(addProjectError) : null),
     [addProjectError],
@@ -1969,6 +1977,126 @@ export default function Sidebar() {
   };
 
   const canAddProject = newCwd.trim().length > 0 && !isAddingProject;
+  const canConnectRemoteSsh =
+    remoteSshTarget.trim().length > 0 &&
+    remoteSshProjectPath.trim().length > 0 &&
+    !isConnectingRemoteSsh;
+
+  const handleConnectRemoteSsh = useCallback(() => {
+    const bridge = window.desktopBridge?.remoteSsh;
+    if (!bridge) {
+      setAddProjectError("Remote SSH is only available in the desktop app.");
+      return;
+    }
+    if (!canConnectRemoteSsh) {
+      return;
+    }
+
+    const remoteProjectPath = remoteSshProjectPath.trim();
+    setIsConnectingRemoteSsh(true);
+    setAddProjectError(null);
+    void bridge
+      .connect({
+        target: remoteSshTarget.trim(),
+        remoteProjectPath,
+        ...(remoteSshStartupCommand.trim()
+          ? { startupCommand: remoteSshStartupCommand.trim() }
+          : {}),
+      })
+      .then(() => {
+        setRemoteSshStatus({
+          mode: "remote",
+          target: remoteSshTarget.trim(),
+          remoteProjectPath,
+          httpUrl: null,
+          wsUrl: null,
+          message: null,
+        });
+        window.localStorage.setItem(REMOTE_SSH_PENDING_PROJECT_PATH_KEY, remoteProjectPath);
+        window.location.reload();
+      })
+      .catch((error) => {
+        const description =
+          error instanceof Error ? error.message : "Unable to connect to the SSH host.";
+        setAddProjectError(description);
+        toastManager.add({
+          type: "error",
+          title: "Unable to connect over SSH",
+          description,
+        });
+      })
+      .finally(() => {
+        setIsConnectingRemoteSsh(false);
+      });
+  }, [
+    canConnectRemoteSsh,
+    remoteSshProjectPath,
+    remoteSshStartupCommand,
+    remoteSshTarget,
+  ]);
+
+  useEffect(() => {
+    if (!isElectron) {
+      return;
+    }
+    const api = readNativeApi();
+    if (!api) return;
+    const pendingProjectPath = window.localStorage.getItem(REMOTE_SSH_PENDING_PROJECT_PATH_KEY);
+    if (!pendingProjectPath) {
+      return;
+    }
+    window.localStorage.removeItem(REMOTE_SSH_PENDING_PROJECT_PATH_KEY);
+    void addProjectFromPath(pendingProjectPath, { createIfMissing: true }).catch((error) => {
+      const description =
+        error instanceof Error ? error.message : "Unable to add the remote project.";
+      setAddProjectError(description);
+      setAddingProject(true);
+      setShowRemoteSshInput(true);
+      setRemoteSshProjectPath(pendingProjectPath);
+      toastManager.add({
+        type: "error",
+        title: "Unable to add remote project",
+        description,
+      });
+    });
+  }, [addProjectFromPath]);
+
+  useEffect(() => {
+    const bridge = window.desktopBridge?.remoteSsh;
+    if (!isElectron || !bridge) {
+      return;
+    }
+    let cancelled = false;
+    void bridge
+      .getStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setRemoteSshStatus(status);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleDisconnectRemoteSsh = useCallback(() => {
+    const bridge = window.desktopBridge?.remoteSsh;
+    if (!bridge) return;
+    void bridge
+      .disconnect()
+      .then((status) => {
+        setRemoteSshStatus(status);
+        window.location.reload();
+      })
+      .catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to disconnect SSH",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      });
+  }, []);
 
   // Keep the native folder picker and project creation in one awaited flow so
   // the UI can show whether we're still opening the dialog or creating the project.
@@ -2008,6 +2136,7 @@ export default function Sidebar() {
   const handleStartAddProject = useCallback(() => {
     setAddProjectError(null);
     setShowManualPathInput(false);
+    setShowRemoteSshInput(false);
     setAddingProject((prev) => !prev);
   }, []);
 
@@ -5479,6 +5608,17 @@ export default function Sidebar() {
                 )}
               </SidebarMenu>
             </SidebarGroup>
+            {isElectron && remoteSshStatus?.mode === "remote" ? (
+              <SidebarGroup className="px-1.5 pb-1.5">
+                <SidebarMenu className="gap-0.5">
+                  <SidebarPrimaryAction
+                    icon={TerminalIcon}
+                    label="Disconnect SSH"
+                    onClick={handleDisconnectRemoteSsh}
+                  />
+                </SidebarMenu>
+              </SidebarGroup>
+            ) : null}
 
             {isOnWorkspace ? (
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
@@ -5690,8 +5830,13 @@ export default function Sidebar() {
 
                 {shouldShowProjectPathEntry && (
                   <div className="mb-2.5 px-1">
-                    {!showManualPathInput ? (
-                      <div className="flex gap-1.5">
+                    {!showManualPathInput && !showRemoteSshInput ? (
+                      <div
+                        className={cn(
+                          "grid gap-1.5",
+                          isElectron ? "grid-cols-2" : "grid-cols-1",
+                        )}
+                      >
                         {isElectron && (
                           <button
                             type="button"
@@ -5715,6 +5860,75 @@ export default function Sidebar() {
                           <TbCursorText className="size-3.5" />
                           Type path
                         </button>
+                        {isElectron && (
+                          <button
+                            type="button"
+                            className="col-span-2 flex h-8 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:opacity-50"
+                            onClick={() => {
+                              setShowRemoteSshInput(true);
+                              setAddProjectError(null);
+                            }}
+                            disabled={isConnectingRemoteSsh}
+                          >
+                            <TerminalIcon className="size-3.5" />
+                            Remote SSH
+                          </button>
+                        )}
+                      </div>
+                    ) : showRemoteSshInput ? (
+                      <div className="space-y-1.5">
+                        <input
+                          className="h-8 w-full rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-[color:var(--color-border-focus)] focus:outline-none"
+                          placeholder="user@host"
+                          value={remoteSshTarget}
+                          onChange={(event) => {
+                            setRemoteSshTarget(event.target.value);
+                            setAddProjectError(null);
+                          }}
+                          autoFocus
+                        />
+                        <input
+                          className="h-8 w-full rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-[color:var(--color-border-focus)] focus:outline-none"
+                          placeholder="/path/on/remote/server"
+                          value={remoteSshProjectPath}
+                          onChange={(event) => {
+                            setRemoteSshProjectPath(event.target.value);
+                            setAddProjectError(null);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") handleConnectRemoteSsh();
+                            if (event.key === "Escape") {
+                              setShowRemoteSshInput(false);
+                              setAddProjectError(null);
+                            }
+                          }}
+                        />
+                        <input
+                          className="h-8 w-full rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-[color:var(--color-border-focus)] focus:outline-none"
+                          placeholder="Start command, optional"
+                          value={remoteSshStartupCommand}
+                          onChange={(event) => setRemoteSshStartupCommand(event.target.value)}
+                        />
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            className="flex h-8 flex-1 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/80 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+                            onClick={() => {
+                              setShowRemoteSshInput(false);
+                              setAddProjectError(null);
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="flex h-8 flex-1 items-center justify-center rounded-lg bg-[var(--color-background-button-primary)] px-2 text-[length:var(--app-font-size-ui,12px)] text-white transition-colors disabled:opacity-50"
+                            onClick={handleConnectRemoteSsh}
+                            disabled={!canConnectRemoteSsh}
+                          >
+                            {isConnectingRemoteSsh ? "Connecting..." : "Connect"}
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <div

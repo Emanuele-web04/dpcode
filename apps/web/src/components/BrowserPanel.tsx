@@ -467,7 +467,13 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     if (browserWebviewTabIdRef.current !== activeTab.id) {
       browserWebviewTabIdRef.current = activeTab.id;
       browserWebviewAttachKeyRef.current = null;
-      webview.setAttribute("src", initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL);
+      const initialWebviewUrl =
+        window.desktopBridge !== undefined
+          ? BROWSER_BLANK_URL
+          : initialUrl.length > 0
+            ? initialUrl
+            : BROWSER_BLANK_URL;
+      webview.setAttribute("src", initialWebviewUrl);
     }
 
     const attachVisibleWebview = () => {
