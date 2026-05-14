@@ -40,6 +40,7 @@ import {
   getRenderablePatch,
   resolveDiffCopyText,
   resolveDiffThemeName,
+  serializeRenderablePatchText,
   summarizePatchStats,
 } from "../lib/diffRendering";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
@@ -56,7 +57,7 @@ import { getProviderStartOptions, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import ChatMarkdown from "./ChatMarkdown";
-import { resolveDiffPanelThread } from "./DiffPanel.logic";
+import { resolveDiffPanelThread, resolveDiffSelectAllArmed } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
@@ -195,6 +196,8 @@ export default function DiffPanel({
   const setRepoDiffScope = useRepoDiffScopeStore((store) => store.setScope);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const patchViewportRef = useRef<HTMLDivElement>(null);
+  // Tracks an in-flight "select all then copy" gesture inside the virtualized diff surface.
+  const diffSelectAllArmedRef = useRef(false);
   const turnStripRef = useRef<HTMLDivElement>(null);
   const previousDiffOpenRef = useRef(false);
   const [canScrollTurnStripLeft, setCanScrollTurnStripLeft] = useState(false);
@@ -403,10 +406,15 @@ export default function DiffPanel({
   const isSidebarMode = mode === "sidebar";
   const { copyToClipboard, isCopied: isSummaryCopied } = useCopyToClipboard();
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
-  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
   const renderablePatch = useMemo(
     () => getRenderablePatch(activeReviewPatch, `diff-panel:${resolvedTheme}`),
     [activeReviewPatch, resolvedTheme],
+  );
+  // Serialize the full diff straight from the parsed model so copy paths never depend on
+  // which virtualized rows happen to be mounted in the DOM.
+  const diffCopyText = useMemo(
+    () => serializeRenderablePatchText(renderablePatch) ?? resolveDiffCopyText(activeReviewPatch),
+    [renderablePatch, activeReviewPatch],
   );
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
@@ -507,16 +515,10 @@ export default function DiffPanel({
         ? "Failed to generate diff summary."
         : null;
   const canShowSummary = Boolean(
-    !diffEnvironmentPending &&
-    activeCwd &&
-    (!hasResolvedRepoPatch || !hasNoRepoChanges),
+    !diffEnvironmentPending && activeCwd && (!hasResolvedRepoPatch || !hasNoRepoChanges),
   );
   const canPrefetchSummary = Boolean(
-    diffOpen &&
-    !diffEnvironmentPending &&
-    activeCwd &&
-    normalizedRepoPatch &&
-    !hasNoRepoChanges,
+    diffOpen && !diffEnvironmentPending && activeCwd && normalizedRepoPatch && !hasNoRepoChanges,
   );
   const canShowTotal = Boolean(!diffEnvironmentPending && activeCwd);
 
@@ -564,6 +566,49 @@ export default function DiffPanel({
       return next;
     });
   }, []);
+
+  // The diff surface is virtualized and renders into shadow DOM, so a native
+  // "select all + copy" only captures the handful of mounted rows. We watch the
+  // document: a Cmd/Ctrl+A keydown still passes through the viewport element (so we can
+  // tell the gesture started in the diff), and the matching `copy` event — which does
+  // *not* travel through the viewport — is then hijacked to write the fully serialized
+  // diff so every line reaches the clipboard.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const viewport = patchViewportRef.current;
+      const isWithinDiffViewport = viewport ? event.composedPath().includes(viewport) : false;
+      diffSelectAllArmedRef.current = resolveDiffSelectAllArmed(
+        diffSelectAllArmedRef.current,
+        event,
+        isWithinDiffViewport,
+      );
+    };
+    const handlePointerDown = () => {
+      // Any fresh pointer interaction ends the select-all gesture.
+      diffSelectAllArmedRef.current = false;
+    };
+    const handleCopy = (event: ClipboardEvent) => {
+      if (!diffSelectAllArmedRef.current) {
+        return;
+      }
+      // One-shot: the next deliberate select-all must re-arm it.
+      diffSelectAllArmedRef.current = false;
+      if (!diffCopyText || !event.clipboardData) {
+        return;
+      }
+      event.preventDefault();
+      event.clipboardData.setData("text/plain", diffCopyText);
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("copy", handleCopy, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("copy", handleCopy, true);
+    };
+  }, [diffCopyText]);
 
   const selectTurn = (turnId: TurnId) => {
     if (!activeThread) return;
@@ -943,8 +988,8 @@ export default function DiffPanel({
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">Repo summary</p>
                   <p className="text-[11px] text-muted-foreground">
-                    Generated from the current{" "}
-                    {REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff.
+                    Generated from the current {REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()}{" "}
+                    diff.
                   </p>
                 </div>
                 {diffSummaryText ? (

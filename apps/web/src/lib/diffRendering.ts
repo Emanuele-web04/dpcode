@@ -4,6 +4,7 @@
 // Depends on: @pierre/diffs patch parsing
 
 import { parsePatchFiles } from "@pierre/diffs";
+import type { Hunk } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 export const DIFF_THEME_NAMES = {
@@ -96,6 +97,85 @@ export function getRenderablePatch(
       reason: "Failed to parse patch. Showing raw patch.",
     };
   }
+}
+
+// @pierre/diffs keeps trailing newlines on parsed line entries and hunk headers; drop
+// them so the serializer's own `\n` join does not introduce spurious blank lines.
+function stripLineBreak(line: string): string {
+  return line.replace(/\r?\n$/, "");
+}
+
+function serializeHunkHeader(hunk: Hunk): string {
+  const specs = stripLineBreak(
+    hunk.hunkSpecs ??
+      `@@ -${hunk.deletionStart},${hunk.deletionCount} +${hunk.additionStart},${hunk.additionCount} @@`,
+  );
+  const context = hunk.hunkContext ? stripLineBreak(hunk.hunkContext) : "";
+  return context ? `${specs} ${context}` : specs;
+}
+
+// Reconstruct the full unified-diff text for a single parsed file straight from the
+// @pierre/diffs model so copy paths never depend on which virtualized rows are mounted.
+export function serializeFileDiffMetadata(file: FileDiffMetadata): string {
+  const newPath = file.name;
+  const oldPath = file.prevName ?? file.name;
+  const lines: string[] = [`diff --git a/${oldPath} b/${newPath}`];
+
+  if (file.type === "new") {
+    lines.push(`new file mode ${file.mode ?? "100644"}`);
+  } else if (file.type === "deleted") {
+    lines.push(`deleted file mode ${file.prevMode ?? file.mode ?? "100644"}`);
+  } else if (file.type === "rename-pure" || file.type === "rename-changed") {
+    lines.push(`rename from ${oldPath}`, `rename to ${newPath}`);
+  }
+
+  lines.push(
+    `--- ${file.type === "new" ? "/dev/null" : `a/${oldPath}`}`,
+    `+++ ${file.type === "deleted" ? "/dev/null" : `b/${newPath}`}`,
+  );
+
+  for (const hunk of file.hunks) {
+    lines.push(serializeHunkHeader(hunk));
+    for (const segment of hunk.hunkContent) {
+      if (segment.type === "context") {
+        for (let offset = 0; offset < segment.lines; offset += 1) {
+          const content =
+            file.additionLines[segment.additionLineIndex + offset] ??
+            file.deletionLines[segment.deletionLineIndex + offset] ??
+            "";
+          lines.push(` ${stripLineBreak(content)}`);
+        }
+        continue;
+      }
+      for (let offset = 0; offset < segment.deletions; offset += 1) {
+        lines.push(
+          `-${stripLineBreak(file.deletionLines[segment.deletionLineIndex + offset] ?? "")}`,
+        );
+      }
+      for (let offset = 0; offset < segment.additions; offset += 1) {
+        lines.push(
+          `+${stripLineBreak(file.additionLines[segment.additionLineIndex + offset] ?? "")}`,
+        );
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// Serialize an entire renderable patch (every file, every line) for clipboard writes.
+export function serializeRenderablePatchText(renderable: RenderablePatch | null): string | null {
+  if (!renderable) {
+    return null;
+  }
+  if (renderable.kind === "raw") {
+    return renderable.text.length > 0 ? renderable.text : null;
+  }
+  if (renderable.files.length === 0) {
+    return null;
+  }
+  const serialized = renderable.files.map(serializeFileDiffMetadata).join("\n");
+  return serialized.length > 0 ? serialized : null;
 }
 
 // Summarize parsed hunks for compact, consistent diff stats across panel chrome.
