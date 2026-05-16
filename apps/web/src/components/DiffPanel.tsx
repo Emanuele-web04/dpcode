@@ -40,6 +40,7 @@ import {
   getRenderablePatch,
   resolveDiffCopyText,
   resolveDiffThemeName,
+  serializeRenderablePatchText,
   summarizePatchStats,
 } from "../lib/diffRendering";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
@@ -56,7 +57,7 @@ import { getProviderStartOptions, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import ChatMarkdown from "./ChatMarkdown";
-import { resolveDiffPanelThread } from "./DiffPanel.logic";
+import { resolveDiffPanelThread, resolveDiffSelectAllArmed } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
@@ -195,6 +196,7 @@ export default function DiffPanel({
   const setRepoDiffScope = useRepoDiffScopeStore((store) => store.setScope);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const patchViewportRef = useRef<HTMLDivElement>(null);
+  const diffSelectAllArmedRef = useRef(false);
   const turnStripRef = useRef<HTMLDivElement>(null);
   const previousDiffOpenRef = useRef(false);
   const [canScrollTurnStripLeft, setCanScrollTurnStripLeft] = useState(false);
@@ -403,10 +405,14 @@ export default function DiffPanel({
   const isSidebarMode = mode === "sidebar";
   const { copyToClipboard, isCopied: isSummaryCopied } = useCopyToClipboard();
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
-  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
   const renderablePatch = useMemo(
     () => getRenderablePatch(activeReviewPatch, `diff-panel:${resolvedTheme}`),
     [activeReviewPatch, resolvedTheme],
+  );
+  // Serialize the whole diff from the parsed model so copy never depends on which virtualized rows are mounted.
+  const diffCopyText = useMemo(
+    () => serializeRenderablePatchText(renderablePatch) ?? resolveDiffCopyText(activeReviewPatch),
+    [renderablePatch, activeReviewPatch],
   );
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
@@ -558,6 +564,43 @@ export default function DiffPanel({
       return next;
     });
   }, []);
+
+  // Watch the document for select-all-then-copy: the Cmd/Ctrl+A keydown passes through the viewport but the copy event does not, so the native copy would only grab the mounted rows.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const viewport = patchViewportRef.current;
+      const isWithinDiffViewport = viewport ? event.composedPath().includes(viewport) : false;
+      diffSelectAllArmedRef.current = resolveDiffSelectAllArmed(
+        diffSelectAllArmedRef.current,
+        event,
+        isWithinDiffViewport,
+      );
+    };
+    const handlePointerDown = () => {
+      diffSelectAllArmedRef.current = false;
+    };
+    const handleCopy = (event: ClipboardEvent) => {
+      if (!diffSelectAllArmedRef.current) {
+        return;
+      }
+      // One-shot: the next select-all must re-arm it.
+      diffSelectAllArmedRef.current = false;
+      if (!diffCopyText || !event.clipboardData) {
+        return;
+      }
+      event.preventDefault();
+      event.clipboardData.setData("text/plain", diffCopyText);
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("copy", handleCopy, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("copy", handleCopy, true);
+    };
+  }, [diffCopyText]);
 
   const selectTurn = (turnId: TurnId) => {
     if (!activeThread) return;
