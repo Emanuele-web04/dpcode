@@ -23,6 +23,31 @@ export function createMemoryStorage(): StateStorage {
   };
 }
 
+let fallbackLocalStorage: StateStorage | undefined;
+
+function isStateStorage(value: unknown): value is StateStorage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Partial<StateStorage>).getItem === "function" &&
+    typeof (value as Partial<StateStorage>).setItem === "function" &&
+    typeof (value as Partial<StateStorage>).removeItem === "function"
+  );
+}
+
+export function getLocalStateStorage(): StateStorage {
+  try {
+    if (isStateStorage(globalThis.localStorage)) {
+      return globalThis.localStorage;
+    }
+  } catch {
+    // Some runtimes expose localStorage behind a throwing accessor.
+  }
+
+  fallbackLocalStorage ??= createMemoryStorage();
+  return fallbackLocalStorage;
+}
+
 export function createDebouncedStorage(
   baseStorage: StateStorage,
   debounceMs: number = 300,

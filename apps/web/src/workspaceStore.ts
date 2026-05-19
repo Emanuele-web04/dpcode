@@ -10,6 +10,7 @@ import {
   getWorkspaceLayoutPreset,
   type WorkspaceLayoutPresetId,
 } from "./workspaceTerminalLayoutPresets";
+import { getLocalStateStorage } from "./lib/storage";
 
 interface WorkspacePage {
   id: string;
@@ -238,7 +239,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>()(
     {
       name: WORKSPACE_STORE_STORAGE_KEY,
       version: 2,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(getLocalStateStorage),
       partialize: (state) => ({
         homeDir: state.homeDir,
         workspacePages: state.workspacePages,

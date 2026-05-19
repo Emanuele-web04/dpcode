@@ -694,6 +694,7 @@ function normalizeProviderKind(value: unknown): ProviderKind | null {
     value === "claudeAgent" ||
     value === "cursor" ||
     value === "gemini" ||
+    value === "hermes" ||
     value === "kilo" ||
     value === "opencode" ||
     value === "pi"
@@ -747,6 +748,14 @@ function makeModelSelection(
         model,
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "gemini" }>["options"] }
+          : {}),
+      };
+    case "hermes":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "hermes" }>["options"] }
           : {}),
       };
     case "kilo":

@@ -34,6 +34,7 @@ import {
   createWorkspaceTerminalGroupFromPreset,
   type WorkspaceLayoutPresetId,
 } from "./workspaceTerminalLayoutPresets";
+import { getLocalStateStorage } from "./lib/storage";
 
 interface ThreadTerminalState {
   entryPoint: ThreadPrimarySurface;
@@ -1362,7 +1363,7 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
     {
       name: TERMINAL_STATE_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(getLocalStateStorage),
       partialize: (state) => ({
         terminalStateByThreadId: state.terminalStateByThreadId,
       }),

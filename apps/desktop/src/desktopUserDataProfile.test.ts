@@ -36,6 +36,23 @@ describe("desktopUserDataProfile", () => {
     ).toBe("/tmp/xdg");
   });
 
+  it("prefers an explicit DP Code desktop app data directory override", () => {
+    expect(
+      resolveDesktopAppDataBase({
+        platform: "darwin",
+        env: { DPCODE_DESKTOP_APP_DATA_DIR: "/tmp/dpcode-appdata" },
+        homeDir: "/Users/tester",
+      }),
+    ).toBe("/tmp/dpcode-appdata");
+    expect(
+      resolveDesktopAppDataBase({
+        platform: "darwin",
+        env: { T3CODE_DESKTOP_APP_DATA_DIR: "/tmp/legacy-appdata" },
+        homeDir: "/Users/tester",
+      }),
+    ).toBe("/tmp/legacy-appdata");
+  });
+
   it("seeds local persistent renderer data into the new DP profile once", () => {
     const tempDir = FS.mkdtempSync(Path.join(OS.tmpdir(), "dpcode-userdata-profile-"));
     try {
