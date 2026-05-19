@@ -11,7 +11,10 @@ function makePiModel(input: {
   reasoning: boolean;
   thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
 }): Pick<Model<Api>, "reasoning" | "thinkingLevelMap"> {
-  return input;
+  const { reasoning, thinkingLevelMap } = input;
+  return thinkingLevelMap === undefined
+    ? { reasoning }
+    : { reasoning, thinkingLevelMap };
 }
 
 describe("getPiSupportedThinkingOptions", () => {
