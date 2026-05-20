@@ -10,6 +10,7 @@ import {
   type GeminiModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
+  type HermesModelOptions,
   type ModelCapabilities,
   type ModelSelection,
   type ModelSlug,
@@ -759,6 +760,18 @@ export function normalizeCursorModelOptions(
     ...(modelOptions?.fastMode !== undefined ? { fastMode: modelOptions.fastMode } : {}),
     ...(modelOptions?.thinking !== undefined ? { thinking: modelOptions.thinking } : {}),
     ...(modelOptions?.contextWindow ? { contextWindow: modelOptions.contextWindow } : {}),
+  };
+  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+}
+
+export function normalizeHermesModelOptions(
+  modelOptions: HermesModelOptions | null | undefined,
+): HermesModelOptions | undefined {
+  const profile = trimOrNull(modelOptions?.profile);
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  const nextOptions = {
+    ...(profile ? { profile } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   };
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }

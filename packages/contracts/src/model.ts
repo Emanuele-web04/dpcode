@@ -99,7 +99,19 @@ export const GeminiModelOptions = Schema.Struct({
 });
 export type GeminiModelOptions = typeof GeminiModelOptions.Type;
 
-export const HermesModelOptions = Schema.Struct({});
+export const HERMES_REASONING_EFFORT_OPTIONS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+export const HermesModelOptions = Schema.Struct({
+  profile: Schema.optional(TrimmedNonEmptyString),
+  reasoningEffort: Schema.optional(Schema.Literals(HERMES_REASONING_EFFORT_OPTIONS)),
+});
 export type HermesModelOptions = typeof HermesModelOptions.Type;
 
 export const OpenCodeModelOptions = Schema.Struct({

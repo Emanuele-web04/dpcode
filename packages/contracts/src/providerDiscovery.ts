@@ -227,6 +227,8 @@ export const ProviderListModelsInput = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  profile: Schema.optional(TrimmedNonEmptyString),
+  cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 
@@ -270,6 +272,7 @@ export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
 
 export const ProviderListAgentsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListAgentsInput = typeof ProviderListAgentsInput.Type;
 

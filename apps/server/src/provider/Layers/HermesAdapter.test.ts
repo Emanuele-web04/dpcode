@@ -166,4 +166,14 @@ it.layer(testLayer)("HermesAdapterLive", (it) => {
       Effect.ensuring(Effect.sync(() => rmSync(tempDir, { recursive: true, force: true }))),
     );
   });
+
+  it.effect("advertises runtime discovery capabilities that match adapter methods", () =>
+    Effect.gen(function* () {
+      const adapter = yield* HermesAdapter;
+      const capabilities = yield* adapter.getComposerCapabilities();
+      assert.equal(capabilities.supportsRuntimeModelList, true);
+      assert.equal(typeof adapter.listModels, "function");
+      assert.equal(typeof adapter.listAgents, "function");
+    }),
+  );
 });

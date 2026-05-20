@@ -1466,6 +1466,39 @@ export default function ChatView({
       enabled: selectedProvider === "pi" || lockedProvider === "pi" || isModelPickerOpen,
     }),
   );
+  const hermesDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({
+      provider: "hermes",
+      binaryPath: settings.hermesBinaryPath || null,
+      enabled: selectedProvider === "hermes" || lockedProvider === "hermes" || isModelPickerOpen,
+    }),
+  );
+  const selectedHermesProfile = useMemo(() => {
+    const threadSelection =
+      activeThread?.modelSelection?.provider === "hermes" ? activeThread.modelSelection : null;
+    const draftSelection = composerDraft.modelSelectionByProvider.hermes;
+    const profile =
+      (draftSelection?.provider === "hermes" ? draftSelection.options?.profile : undefined) ??
+      (threadSelection?.provider === "hermes" ? threadSelection.options?.profile : undefined);
+    if (profile) return profile;
+    return (
+      hermesDynamicAgentsQuery.data?.agents.find(
+        (agent) => agent.description === "hermes-active-profile",
+      )?.name ?? hermesDynamicAgentsQuery.data?.agents[0]?.name
+    );
+  }, [
+    activeThread?.modelSelection,
+    composerDraft.modelSelectionByProvider.hermes,
+    hermesDynamicAgentsQuery.data?.agents,
+  ]);
+  const hermesDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "hermes",
+      binaryPath: settings.hermesBinaryPath || null,
+      profile: selectedHermesProfile ?? null,
+      enabled: selectedProvider === "hermes" || lockedProvider === "hermes" || isModelPickerOpen,
+    }),
+  );
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1498,6 +1531,15 @@ export default function ChatView({
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
     (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
+  const hermesModelDiscoveryEnabled =
+    selectedProvider === "hermes" || lockedProvider === "hermes" || isModelPickerOpen;
+  const hasResolvedHermesModelDiscovery =
+    hermesDynamicModelsQuery.data?.source === "hermes.acp" &&
+    (hermesDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const hermesModelDiscoveryPending =
+    hermesModelDiscoveryEnabled &&
+    !hasResolvedHermesModelDiscovery &&
+    (hermesDynamicModelsQuery.isLoading || hermesDynamicModelsQuery.isFetching);
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -1550,7 +1592,7 @@ export default function ChatView({
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
-      hermes: undefined,
+      hermes: hermesDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -1594,6 +1636,7 @@ export default function ChatView({
     cursorRuntimeModels,
     customModelsByProvider,
     geminiModelsQuery.data,
+    hermesDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
@@ -1612,7 +1655,7 @@ export default function ChatView({
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
-      hermes: [],
+      hermes: hermesDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -1632,7 +1675,7 @@ export default function ChatView({
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
-    hermes: undefined,
+    hermes: hermesDynamicModelsQuery,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
     pi: piDynamicModelsQuery,
@@ -2513,13 +2556,15 @@ export default function ChatView({
     const agents =
       selectedProvider === "claudeAgent"
         ? claudeDynamicAgentsQuery.data?.agents
-        : selectedProvider === "kilo"
-          ? kiloDynamicAgentsQuery.data?.agents
-          : selectedProvider === "opencode"
-            ? openCodeDynamicAgentsQuery.data?.agents
-            : selectedProvider === "codex"
-              ? codexDynamicAgentsQuery.data?.agents
-              : undefined;
+        : selectedProvider === "hermes"
+          ? hermesDynamicAgentsQuery.data?.agents
+          : selectedProvider === "kilo"
+            ? kiloDynamicAgentsQuery.data?.agents
+            : selectedProvider === "opencode"
+              ? openCodeDynamicAgentsQuery.data?.agents
+              : selectedProvider === "codex"
+                ? codexDynamicAgentsQuery.data?.agents
+                : undefined;
     return (agents ?? []).map((a) => ({
       name: a.name,
       displayName: a.displayName,
@@ -2529,6 +2574,7 @@ export default function ChatView({
     selectedProvider,
     claudeDynamicAgentsQuery.data,
     codexDynamicAgentsQuery.data,
+    hermesDynamicAgentsQuery.data,
     kiloDynamicAgentsQuery.data,
     openCodeDynamicAgentsQuery.data,
   ]);
@@ -6526,6 +6572,7 @@ export default function ChatView({
         modelOptionsByProvider={modelOptionsByProvider}
         loadingModelProviders={{
           cursor: cursorModelDiscoveryPending,
+          hermes: hermesModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
         }}
         hiddenProviders={settings.hiddenProviders}

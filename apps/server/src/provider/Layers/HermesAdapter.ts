@@ -1,16 +1,10 @@
 /**
  * HermesAdapterLive — Hermes Agent (`hermes acp`) via ACP.
  *
- * Model discovery: Hermes ACP documents `session/set_model` but no public `list_models`
- * RPC (see https://hermes-agent.nousresearch.com/docs/user-guide/features/acp). MVP stays on
- * static `hermes-agent` plus `settings.providers.hermes.customHermesModels`.
- *
+ * Model and profile discovery use a short-lived ACP probe plus `hermes profile` CLI inventory.
  * User input: editor flows use ACP permission prompts and terminal auth (`hermes acp --setup`),
  * not AskUserQuestion-style elicitation. `respondToUserInput` is intentionally unimplemented
  * until Hermes exposes a matching ACP notification.
- *
- * Health auth: probes use `hermes acp --version` / `--check` only; credential state stays
- * `unknown` because `hermes status` has no machine-readable auth output.
  *
  * @module HermesAdapterLive
  */
@@ -22,6 +16,8 @@ import {
   EventId,
   type ProviderApprovalDecision,
   type ProviderComposerCapabilities,
+  type ProviderListAgentsResult,
+  type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   RuntimeRequestId,
@@ -56,8 +52,9 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import { acpPermissionOutcome, mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
-import { AcpSessionRuntime, type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
+import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -68,8 +65,30 @@ import {
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
-import { resolveHermesAcpSpawn, selectHermesAuthMethodId } from "../hermesAcp.ts";
+import {
+  makeHermesAcpRuntime,
+  normalizeHermesModelSlug,
+  resolveHermesAutoApprovedOption,
+  resolveHermesPermissionOutcome,
+  resolveHermesSessionCwd,
+  shouldSetHermesModel,
+} from "../HermesAcpSupport.ts";
+import {
+  probeHermesCapabilities,
+  resolveHermesProbeBinaryPath,
+  resolveHermesProbeCwd,
+} from "../hermesAcpProbe.ts";
+import {
+  listHermesProfileInventory,
+  resolveHermesProfileHomeFromInventory,
+} from "../hermesProfileInventory.ts";
+import {
+  readHermesProfileReasoningEffort,
+  hermesReasoningEffortDescriptors,
+} from "../hermesProfileReasoning.ts";
+import { toHermesProfileAgents } from "../hermesProfiles.ts";
 import { HermesAdapter, type HermesAdapterShape } from "../Services/HermesAdapter.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "hermes" as const;
@@ -90,6 +109,8 @@ interface HermesSessionContext {
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntimeShape;
+  readonly acpSessionId: string;
+  readonly profileHome?: string;
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
@@ -110,26 +131,11 @@ function trimToUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function shouldSetHermesAcpModel(model: string | undefined): model is string {
-  return model !== undefined && model.trim().length > 0 && model !== "hermes-agent";
-}
-
 function parseHermesResume(raw: unknown): { sessionId: string } | undefined {
   if (!isRecord(raw)) return undefined;
   if (raw.schemaVersion !== HERMES_RESUME_VERSION) return undefined;
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
   return { sessionId: raw.sessionId.trim() };
-}
-
-function resolveHermesSessionCwd(
-  inputCwd: string | undefined,
-  serverConfig: ServerConfigShape,
-): string | undefined {
-  const requestedCwd = inputCwd?.trim();
-  if (requestedCwd) return nodePath.resolve(requestedCwd);
-
-  const fallbackCwd = serverConfig.cwd.trim() || serverConfig.homeDir.trim();
-  return fallbackCwd ? nodePath.resolve(fallbackCwd) : undefined;
 }
 
 function clearHermesActiveTurn(ctx: HermesSessionContext, turnId: TurnId): boolean {
@@ -151,34 +157,6 @@ function settlePendingApprovalsAsCancelled(
     { discard: true },
   );
 }
-
-const makeHermesAcpRuntime = (input: {
-  readonly binaryPath?: string;
-  readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
-  readonly cwd: string;
-  readonly resumeSessionId?: string;
-}): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
-  Effect.gen(function* () {
-    const acpSpawn = resolveHermesAcpSpawn(input.binaryPath);
-    const acpContext = yield* Layer.build(
-      AcpSessionRuntime.layer({
-        spawn: {
-          command: acpSpawn.command,
-          args: acpSpawn.args,
-          cwd: input.cwd,
-        },
-        cwd: input.cwd,
-        ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : {}),
-        clientInfo: { name: "dp-code", version: "0.0.0" },
-        selectAuthMethodId: selectHermesAuthMethodId,
-      }).pipe(
-        Layer.provide(
-          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
-        ),
-      ),
-    );
-    return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
-  });
 
 export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
   return Effect.gen(function* () {
@@ -301,6 +279,9 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         if (ctx.activePromptFiber) yield* Fiber.interrupt(ctx.activePromptFiber);
         if (ctx.notificationFiber) yield* Fiber.interrupt(ctx.notificationFiber);
+        yield* ctx.acp
+          .request("session/close", { sessionId: ctx.acpSessionId })
+          .pipe(Effect.ignore);
         yield* Scope.close(ctx.scope, Exit.void);
         const now = yield* nowIso;
         ctx.session = { ...ctx.session, status: "closed", updatedAt: now };
@@ -331,7 +312,10 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
               issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
             });
           }
-          const cwd = resolveHermesSessionCwd(input.cwd, serverConfig);
+          const cwd = resolveHermesSessionCwd(
+            input.cwd,
+            serverConfig.cwd.trim() || serverConfig.homeDir.trim() || undefined,
+          );
           if (cwd === undefined) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
@@ -350,14 +334,30 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
           );
 
           const providerHermesOptions = input.providerOptions?.hermes;
+          const hermesModelSelection =
+            input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+          const profileName = trimToUndefined(hermesModelSelection?.options?.profile);
+          const profileHome = profileName
+            ? yield* resolveHermesProfileHomeFromInventory({
+                binaryPath: providerHermesOptions?.binaryPath,
+                profile: profileName,
+              })
+            : undefined;
           const resumeSessionId = parseHermesResume(input.resumeCursor)?.sessionId;
+          const acpNativeLoggers = makeAcpNativeLoggers({
+            nativeEventLogger,
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
           const acp = yield* makeHermesAcpRuntime({
             childProcessSpawner,
             cwd,
             ...(providerHermesOptions?.binaryPath
               ? { binaryPath: providerHermesOptions.binaryPath }
               : {}),
+            ...(profileHome ? { profileHome } : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...acpNativeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
             Effect.mapError(
@@ -377,6 +377,18 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
             yield* acp.handleRequestPermission((params) =>
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
+                const autoApprovedOptionId = resolveHermesAutoApprovedOption(
+                  params,
+                  input.runtimeMode,
+                );
+                if (autoApprovedOptionId) {
+                  return {
+                    outcome: {
+                      outcome: "selected" as const,
+                      optionId: autoApprovedOptionId,
+                    },
+                  };
+                }
                 const permissionRequest = parsePermissionRequest(params);
                 const requestId = ApprovalRequestId.makeUnsafe(randomUUID());
                 const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
@@ -410,11 +422,18 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
                     decision: resolved,
                   }),
                 );
+                const optionId = resolveHermesPermissionOutcome(
+                  resolved,
+                  params.options.map((option) => ({
+                    kind: option.kind,
+                    optionId: option.optionId,
+                  })),
+                );
                 return {
                   outcome:
-                    resolved === "cancel"
+                    resolved === "cancel" || !optionId
                       ? ({ outcome: "cancelled" } as const)
-                      : { outcome: "selected" as const, optionId: acpPermissionOutcome(resolved) },
+                      : { outcome: "selected" as const, optionId },
                 };
               }),
             );
@@ -425,12 +444,12 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
             ),
           );
 
-          const hermesModelSelection =
-            input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
           const currentAcpModelId = trimToUndefined(
             started.sessionSetupResult.models?.currentModelId,
           );
-          const model = hermesModelSelection?.model ?? currentAcpModelId ?? "hermes-agent";
+          const model = normalizeHermesModelSlug(
+            hermesModelSelection?.model ?? currentAcpModelId ?? "hermes-agent",
+          );
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -452,6 +471,8 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
             session,
             scope: sessionScope,
             acp,
+            acpSessionId: started.sessionId,
+            ...(profileHome ? { profileHome } : {}),
             notificationFiber: undefined,
             pendingApprovals,
             turns: [],
@@ -462,8 +483,12 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
             stopped: false,
           };
 
-          if (shouldSetHermesAcpModel(hermesModelSelection?.model)) {
-            yield* setHermesSessionModel(ctx, hermesModelSelection.model, input.threadId);
+          if (shouldSetHermesModel(hermesModelSelection?.model)) {
+            yield* setHermesSessionModel(
+              ctx,
+              normalizeHermesModelSlug(hermesModelSelection.model),
+              input.threadId,
+            );
           }
 
           const nf = yield* Stream.runDrain(
@@ -581,6 +606,13 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
         input.threadId,
         Effect.gen(function* () {
           const ctx = yield* requireSession(input.threadId);
+          if (ctx.activeTurnId !== undefined) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "sendTurn",
+              issue: "Hermes only supports one active turn per session.",
+            });
+          }
           const text = input.input?.trim();
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
           if (text) {
@@ -640,8 +672,8 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
             input.modelSelection?.provider === PROVIDER
               ? input.modelSelection.model
               : (ctx.session.model ?? "hermes-agent");
-          if (shouldSetHermesAcpModel(model)) {
-            yield* setHermesSessionModel(ctx, model, input.threadId);
+          if (shouldSetHermesModel(model)) {
+            yield* setHermesSessionModel(ctx, normalizeHermesModelSlug(model), input.threadId);
           }
           ctx.activeTurnId = turnId;
           ctx.lastPlanFingerprint = undefined;
@@ -821,14 +853,95 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
       supportsNativeSlashCommandDiscovery: false,
       supportsPluginMentions: false,
       supportsPluginDiscovery: false,
-      supportsRuntimeModelList: false,
+      supportsRuntimeModelList: true,
       supportsThreadCompaction: false,
       supportsThreadImport: false,
     } satisfies ProviderComposerCapabilities);
 
+    const listModels: NonNullable<HermesAdapterShape["listModels"]> = (input) =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        const binaryPath = resolveHermesProbeBinaryPath(
+          trimToUndefined(input.binaryPath) ?? settings.providers.hermes.binaryPath,
+        );
+        const cwd = resolveHermesProbeCwd(trimToUndefined(input.cwd));
+        const profile = trimToUndefined(input.profile);
+        const profileHome =
+          profile !== undefined
+            ? yield* resolveHermesProfileHomeFromInventory({ binaryPath, profile })
+            : undefined;
+        const probe = yield* probeHermesCapabilities({
+          binaryPath,
+          cwd,
+          ...(profile ? { profile } : {}),
+          ...(profileHome ? { profileHome } : {}),
+        });
+        const defaultReasoningEffort =
+          profileHome !== undefined
+            ? yield* readHermesProfileReasoningEffort(profileHome)
+            : undefined;
+        const reasoningDescriptors = hermesReasoningEffortDescriptors(defaultReasoningEffort);
+        return {
+          models: probe.models.map((model) => ({
+            ...model,
+            ...(reasoningDescriptors.length > 0
+              ? {
+                  supportedReasoningEfforts: reasoningDescriptors,
+                  ...(defaultReasoningEffort
+                    ? { defaultReasoningEffort }
+                    : {}),
+                }
+              : {}),
+          })),
+          source: "hermes.acp",
+          cached: false,
+        } satisfies ProviderListModelsResult;
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "model/list",
+              detail: cause instanceof Error ? cause.message : "Failed to list Hermes models.",
+              cause,
+            }),
+        ),
+      );
+
+    const listAgents: NonNullable<HermesAdapterShape["listAgents"]> = () =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        const profiles = yield* listHermesProfileInventory(settings.providers.hermes.binaryPath);
+        return {
+          agents: toHermesProfileAgents(profiles),
+          source: "hermes.profile",
+          cached: false,
+        } satisfies ProviderListAgentsResult;
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "agent/list",
+              detail: cause instanceof Error ? cause.message : "Failed to list Hermes profiles.",
+              cause,
+            }),
+        ),
+      );
+
+    yield* Effect.addFinalizer(() =>
+      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true }).pipe(
+        Effect.tap(() => PubSub.shutdown(runtimeEventPubSub)),
+        Effect.tap(() => nativeEventLogger?.close() ?? Effect.void),
+      ),
+    );
+
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        supportsRuntimeModelList: true,
+      },
       startSession,
       sendTurn,
       interruptTurn,
@@ -844,6 +957,8 @@ export function makeHermesAdapter(options?: HermesAdapterLiveOptions) {
         Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true }),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
       getComposerCapabilities: () => getComposerCapabilities,
+      listModels,
+      listAgents,
     } satisfies HermesAdapterShape;
   });
 }

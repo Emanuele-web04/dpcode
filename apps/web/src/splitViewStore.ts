@@ -8,7 +8,6 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { type ChatRightPanel } from "./diffRouteSearch";
-import { getLocalStateStorage } from "./lib/storage";
 import { randomUUID } from "./lib/utils";
 import {
   canSubdividePane,
@@ -758,7 +757,7 @@ export const useSplitViewStore = create<SplitViewStore>()(
     {
       name: SPLIT_VIEW_STORAGE_KEY,
       version: SPLIT_VIEW_STORAGE_VERSION,
-      storage: createJSONStorage(getLocalStateStorage),
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         splitViewsById: state.splitViewsById,
         splitViewIdBySourceThreadId: state.splitViewIdBySourceThreadId,

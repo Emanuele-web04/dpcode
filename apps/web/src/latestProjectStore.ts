@@ -2,8 +2,6 @@ import type { ProjectId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { getLocalStateStorage } from "./lib/storage";
-
 const LATEST_PROJECT_STORAGE_KEY = "dpcode:latest-project:v1";
 
 interface LatestProjectStore {
@@ -30,7 +28,7 @@ export const useLatestProjectStore = create<LatestProjectStore>()(
     }),
     {
       name: LATEST_PROJECT_STORAGE_KEY,
-      storage: createJSONStorage(getLocalStateStorage),
+      storage: createJSONStorage(() => localStorage),
     },
   ),
 );

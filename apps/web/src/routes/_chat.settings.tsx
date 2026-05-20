@@ -342,7 +342,8 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryDescription: (
       <>
         Leave blank to launch <code>hermes acp</code> from your PATH. Direct <code>hermes-acp</code>{" "}
-        binaries are also supported.
+        binaries are also supported. Configure credentials with <code>hermes model</code> or edit{" "}
+        <code>~/.hermes/.env</code>.
       </>
     ),
   },
@@ -2344,6 +2345,7 @@ function SettingsRouteView() {
                       value !== "claudeAgent" &&
                       value !== "cursor" &&
                       value !== "gemini" &&
+                      value !== "hermes" &&
                       value !== "kilo" &&
                       value !== "opencode" &&
                       value !== "pi"

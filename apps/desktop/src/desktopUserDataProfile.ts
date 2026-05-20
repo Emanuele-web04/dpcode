@@ -31,11 +31,6 @@ export function resolveDesktopAppDataBase(input?: {
 }): string {
   const platform = input?.platform ?? process.platform;
   const env = input?.env ?? process.env;
-  const explicitAppDataDir =
-    env.DPCODE_DESKTOP_APP_DATA_DIR?.trim() || env.T3CODE_DESKTOP_APP_DATA_DIR?.trim();
-  if (explicitAppDataDir) {
-    return explicitAppDataDir;
-  }
   const homeDir = input?.homeDir ?? OS.homedir();
 
   if (platform === "win32") {

@@ -54,6 +54,11 @@ import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import { normalizeGeminiCapabilityProbeResult, probeGeminiCapabilities } from "../geminiAcpProbe";
 import { resolveHermesAcpSpawn } from "../hermesAcp";
+import {
+  normalizeHermesCapabilityProbeResult,
+  probeHermesCapabilities,
+  resolveHermesProbeCwd,
+} from "../hermesAcpProbe";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
   orderProviderStatuses,
@@ -1330,14 +1335,37 @@ export const checkHermesProviderStatus = (
       } satisfies ServerProviderStatus;
     }
 
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const capabilityProbe = yield* probeHermesCapabilities({
+      binaryPath: executable ?? "hermes",
+      cwd: resolveHermesProbeCwd(),
+    }).pipe(Effect.result);
+
+    if (Result.isFailure(capabilityProbe)) {
+      const error = capabilityProbe.failure;
+      return {
+        provider: HERMES_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Hermes CLI is installed, but DP Code could not verify authentication or discover models. ${error.message}`
+            : "Hermes CLI is installed, but DP Code could not verify authentication or discover models.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const probe = normalizeHermesCapabilityProbeResult(capabilityProbe.success);
     return {
       provider: HERMES_PROVIDER,
-      status: "ready" as const,
+      status: probe.status,
       available: true,
-      authStatus: "unknown" as const,
-      version: parseGenericCliVersion(`${version.stdout}\n${version.stderr}`),
+      authStatus: probe.auth.status,
+      version: parsedVersion,
       checkedAt,
-      message: "Hermes ACP is available.",
+      ...(probe.message ? { message: probe.message } : { message: "Hermes ACP is available." }),
     } satisfies ServerProviderStatus;
   });
 

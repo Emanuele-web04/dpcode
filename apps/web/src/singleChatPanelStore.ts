@@ -7,7 +7,6 @@ import type { ThreadId, TurnId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { ChatRightPanel } from "./diffRouteSearch";
-import { getLocalStateStorage } from "./lib/storage";
 
 export interface SingleChatPanelState {
   panel: ChatRightPanel | null;
@@ -82,7 +81,7 @@ export const useSingleChatPanelStore = create<SingleChatPanelStore>()(
     }),
     {
       name: SINGLE_CHAT_PANEL_STORAGE_KEY,
-      storage: createJSONStorage(getLocalStateStorage),
+      storage: createJSONStorage(() => localStorage),
     },
   ),
 );

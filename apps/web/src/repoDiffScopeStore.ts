@@ -7,8 +7,6 @@ import type { GitReadWorkingTreeDiffInput } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { getLocalStateStorage } from "./lib/storage";
-
 export type RepoDiffScope = NonNullable<GitReadWorkingTreeDiffInput["scope"]>;
 
 export const DEFAULT_REPO_DIFF_SCOPE: RepoDiffScope = "workingTree";
@@ -41,7 +39,7 @@ export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
     }),
     {
       name: REPO_DIFF_SCOPE_STORAGE_KEY,
-      storage: createJSONStorage(getLocalStateStorage),
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ scope: state.scope }),
     },
   ),
