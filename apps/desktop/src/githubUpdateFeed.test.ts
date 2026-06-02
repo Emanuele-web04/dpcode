@@ -6,6 +6,8 @@ import {
   resolveGitHubUpdateSource,
 } from "./githubUpdateFeed";
 
+const dpCodeAssets = (version: string) => [{ name: `DP-Code-${version}-arm64.zip` }];
+
 describe("resolveGitHubUpdateSource", () => {
   it("returns null for non-github providers", () => {
     expect(resolveGitHubUpdateSource({ provider: "generic" })).toBeNull();
@@ -31,8 +33,18 @@ describe("pickLatestStableGitHubRelease", () => {
   it("chooses the highest stable semver release instead of the first entry", () => {
     expect(
       pickLatestStableGitHubRelease([
-        { tag_name: "v0.0.30", draft: false, prerelease: false },
-        { tag_name: "v0.0.31", draft: false, prerelease: false },
+        {
+          tag_name: "v0.0.30",
+          draft: false,
+          prerelease: false,
+          assets: dpCodeAssets("0.0.30"),
+        },
+        {
+          tag_name: "v0.0.31",
+          draft: false,
+          prerelease: false,
+          assets: dpCodeAssets("0.0.31"),
+        },
       ]),
     ).toEqual({
       tag: "v0.0.31",
@@ -43,16 +55,32 @@ describe("pickLatestStableGitHubRelease", () => {
   it("ignores drafts, prereleases, and invalid tags", () => {
     expect(
       pickLatestStableGitHubRelease([
-        { tag_name: "v0.0.32-beta.1", draft: false, prerelease: true },
-        { tag_name: "build-123", draft: false, prerelease: false },
-        { tag_name: "v0.0.31", draft: true, prerelease: false },
-        { tag_name: "v0.0.30", draft: false, prerelease: false },
+        {
+          tag_name: "v0.0.32-beta.1",
+          draft: false,
+          prerelease: true,
+          assets: dpCodeAssets("0.0.32"),
+        },
+        { tag_name: "build-123", draft: false, prerelease: false, assets: dpCodeAssets("0.0.33") },
+        {
+          tag_name: "v0.0.31",
+          draft: true,
+          prerelease: false,
+          assets: dpCodeAssets("0.0.31"),
+        },
+        {
+          tag_name: "v0.0.30",
+          draft: false,
+          prerelease: false,
+          assets: dpCodeAssets("0.0.30"),
+        },
       ]),
     ).toEqual({
       tag: "v0.0.30",
       version: "0.0.30",
     });
   });
+
 });
 
 describe("buildGitHubReleaseDownloadBaseUrl", () => {

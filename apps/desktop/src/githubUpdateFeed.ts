@@ -9,6 +9,7 @@ type GitHubReleaseRecord = {
   readonly tag_name?: unknown;
   readonly draft?: unknown;
   readonly prerelease?: unknown;
+  readonly assets?: unknown;
 };
 
 export type LatestGitHubRelease = {
@@ -46,6 +47,21 @@ function compareParsedVersions(left: ParsedVersion, right: ParsedVersion): numbe
     return left.minor - right.minor;
   }
   return left.patch - right.patch;
+}
+
+function hasDpCodeDesktopAsset(release: GitHubReleaseRecord, version: string): boolean {
+  if (!Array.isArray(release.assets)) {
+    return false;
+  }
+
+  const dpCodeArtifactPrefix = `DP-Code-${version}-`;
+  return release.assets.some((asset) => {
+    if (!asset || typeof asset !== "object") {
+      return false;
+    }
+    const name = (asset as { name?: unknown }).name;
+    return typeof name === "string" && name.startsWith(dpCodeArtifactPrefix);
+  });
 }
 
 function getGitHubApiBaseUrl(source: GitHubUpdateSource): URL {
@@ -97,11 +113,16 @@ export function pickLatestStableGitHubRelease(
       continue;
     }
 
+    const versionString = `${version.major}.${version.minor}.${version.patch}`;
+    if (!hasDpCodeDesktopAsset(release, versionString)) {
+      continue;
+    }
+
     if (bestVersion === null || compareParsedVersions(version, bestVersion) > 0) {
       bestVersion = version;
       best = {
         tag,
-        version: `${version.major}.${version.minor}.${version.patch}`,
+        version: versionString,
       };
     }
   }
