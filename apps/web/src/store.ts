@@ -1517,6 +1517,7 @@ function normalizeThreadFromReadModel(
   const session = normalizeThreadSession(incoming.session, previous?.session);
   const messages = normalizeChatMessages(incoming.messages, previous?.messages);
   const proposedPlans = normalizeProposedPlans(incoming.proposedPlans, previous?.proposedPlans);
+  const goal = incoming.goal ?? null;
   const latestTurn = normalizeLatestTurn(incoming.latestTurn, previous?.latestTurn);
   const handoff =
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
@@ -1611,7 +1612,8 @@ function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
     previous.turnDiffSummaries === turnDiffSummaries &&
-    previous.activities === activities
+    previous.activities === activities &&
+    deepEqualJson(previous.goal ?? null, goal)
   ) {
     return previous;
   }
@@ -1627,6 +1629,7 @@ function normalizeThreadFromReadModel(
     session,
     messages,
     proposedPlans,
+    goal,
     error,
     createdAt: incoming.createdAt,
     archivedAt: incoming.archivedAt ?? null,

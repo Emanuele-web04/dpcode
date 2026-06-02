@@ -1,6 +1,7 @@
 # Goal feature — port from pi-goal / Codex into Synara
 
-Status: in progress (branch `features/goal`).
+Status: implemented on branch `features/goal` — server (event-sourced + SQLite-persisted,
+integration e2e green) and web (`/goal` command + goal indicator), with unit + e2e tests.
 
 ## What this is
 
@@ -46,8 +47,17 @@ divergence from Codex canon and is intentionally _not_ part of v1.)
 
 `OrchestrationMessageSource` gains `"goal-continuation"` (alongside
 `native | handoff-import | fork-import`). `ThreadTurnStartCommand` gains optional
-`inputSource`; the decider stamps it onto `thread.message-sent.source`. The web hides /
-dims messages with `source === "goal-continuation"`, mirroring pi's `display:false`.
+`inputSource`; the decider stamps it onto `thread.message-sent.source`. This lets the web
+hide/dim messages with `source === "goal-continuation"` (mirroring pi's `display:false`);
+hiding them in the timeline is a follow-up — the field is in place.
+
+## Web surface
+
+- `/goal <objective>` (with optional `--budget <n>`) plus `/goal status|pause|resume|clear|
+  complete`, registered in `composerSlashCommands` and dispatched from
+  `useComposerSlashCommands`. Offered to non-Claude providers (Claude ships a native
+  `/goal`). Creating a goal auto-starts the first turn (pi-goal parity).
+- `GoalIndicator` composer chip shows the live goal's lifecycle status and turn count.
 
 ## Commands / events / state
 
@@ -57,7 +67,7 @@ dims messages with `source === "goal-continuation"`, mirroring pi's `display:fal
   available to the user (`/goal complete`). Per Codex/pi, `complete` is the only
   model-assertable transition; pause/resume/clear stay user-controlled.
 - State: `OrchestrationGoal { id, objective, status, tokenBudget, tokensUsed, usage,
-  turnCount, continuationCount, timeUsedSeconds, createdAt, updatedAt }`. The no-activity
+turnCount, continuationCount, timeUsedSeconds, createdAt, updatedAt }`. The no-activity
   suppression heuristic lives in the reactor (computed from thread activities), not as
   persisted goal state.
 
