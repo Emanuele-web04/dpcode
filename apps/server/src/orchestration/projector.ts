@@ -1,4 +1,9 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationGoal,
+  OrchestrationReadModel,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -15,6 +20,8 @@ import {
   ProjectMetaUpdatedPayload,
   ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
+  ThreadGoalCreatedPayload,
+  ThreadGoalLifecyclePayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
@@ -59,6 +66,78 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+}
+
+function goalElapsedSeconds(createdAt: string, completedAt: string): number {
+  const start = Date.parse(createdAt);
+  const end = Date.parse(completedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return 0;
+  }
+  return Math.floor((end - start) / 1000);
+}
+
+// Best-effort per-turn token usage extraction from a provider-shaped (Json) activity
+// payload. Mirrors pi-goal's tolerant `extractUsageAccounting`: providers report usage
+// under varying key names, so we probe a set of aliases and fall back to zero.
+function extractTurnUsageFromActivityPayload(payload: unknown): {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+} {
+  if (typeof payload !== "object" || payload === null) {
+    return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  }
+  const nested = (payload as { usage?: unknown }).usage;
+  const source = (
+    typeof nested === "object" && nested !== null ? nested : payload
+  ) as Record<string, unknown>;
+  const num = (...keys: ReadonlyArray<string>): number => {
+    for (const key of keys) {
+      const value = source[key];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        return Math.floor(value);
+      }
+    }
+    return 0;
+  };
+  const inputTokens = num("inputTokens", "input", "promptTokens", "input_tokens", "prompt_tokens");
+  const outputTokens = num(
+    "outputTokens",
+    "output",
+    "completionTokens",
+    "output_tokens",
+    "completion_tokens",
+  );
+  const explicitTotal = num("totalTokens", "total", "total_tokens");
+  const totalTokens = explicitTotal > 0 ? explicitTotal : inputTokens + outputTokens;
+  return { inputTokens, outputTokens, totalTokens };
+}
+
+// Fold a completed turn into the active goal: increment turn count, accumulate usage,
+// refresh elapsed time, and trip the budget guard. Mirrors pi-goal's `turn_end` handler.
+function applyGoalTurnAccounting(
+  goal: OrchestrationGoal,
+  activityPayload: unknown,
+  occurredAt: string,
+): OrchestrationGoal {
+  const delta = extractTurnUsageFromActivityPayload(activityPayload);
+  const tokensUsed = goal.tokensUsed + delta.totalTokens;
+  const usage = {
+    inputTokens: goal.usage.inputTokens + delta.inputTokens,
+    outputTokens: goal.usage.outputTokens + delta.outputTokens,
+    totalTokens: goal.usage.totalTokens + delta.totalTokens,
+  };
+  const budgetExhausted = goal.tokenBudget !== null && tokensUsed >= goal.tokenBudget;
+  return {
+    ...goal,
+    status: budgetExhausted ? "budget_limited" : goal.status,
+    tokensUsed,
+    usage,
+    turnCount: goal.turnCount + 1,
+    timeUsedSeconds: goalElapsedSeconds(goal.createdAt, occurredAt),
+    updatedAt: occurredAt,
+  };
 }
 
 function decodeForEvent<A>(
@@ -544,10 +623,24 @@ export function projectEvent(
           : [...thread.messages, message];
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
 
+        // Count hidden goal-continuation turns against the active goal.
+        const goal = thread.goal;
+        const goalContinuationPatch =
+          goal && goal.status === "active" && payload.source === "goal-continuation"
+            ? {
+                goal: {
+                  ...goal,
+                  continuationCount: goal.continuationCount + 1,
+                  updatedAt: event.occurredAt,
+                },
+              }
+            : {};
+
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
+            ...goalContinuationPatch,
             updatedAt: event.occurredAt,
           }),
         };
@@ -850,15 +943,69 @@ export function projectEvent(
             .toSorted(compareThreadActivities)
             .slice(-MAX_THREAD_ACTIVITIES);
 
+          // Accumulate goal turn/usage accounting when a turn completes.
+          const goal = thread.goal;
+          const goalAccountingPatch =
+            goal && goal.status === "active" && payload.activity.kind === "turn.completed"
+              ? { goal: applyGoalTurnAccounting(goal, payload.activity.payload, event.occurredAt) }
+              : {};
+
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
+              ...goalAccountingPatch,
               updatedAt: event.occurredAt,
             }),
           };
         }),
       );
+
+    case "thread.goal-created":
+      return decodeForEvent(ThreadGoalCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              goal: payload.goal,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.goal-paused":
+    case "thread.goal-resumed":
+    case "thread.goal-cleared":
+    case "thread.goal-completed": {
+      const nextStatus =
+        event.type === "thread.goal-paused"
+          ? "paused"
+          : event.type === "thread.goal-resumed"
+            ? "active"
+            : event.type === "thread.goal-cleared"
+              ? "cleared"
+              : "complete";
+      return decodeForEvent(ThreadGoalLifecyclePayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.goal) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              goal: { ...thread.goal, status: nextStatus, updatedAt: payload.updatedAt },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+    }
 
     default:
       return Effect.succeed(nextBase);
