@@ -46,4 +46,16 @@ describe("GoalIndicator", () => {
     expect(html).toContain("budget limited");
     expect(html).toContain('data-goal-status="budget_limited"');
   });
+
+  it("renders paused and completed statuses", () => {
+    const paused = renderToStaticMarkup(<GoalIndicator goal={makeGoal({ status: "paused" })} />);
+    expect(paused).toContain("Goal: paused");
+    expect(paused).toContain('data-goal-status="paused"');
+
+    const completed = renderToStaticMarkup(
+      <GoalIndicator goal={makeGoal({ status: "complete" })} />,
+    );
+    expect(completed).toContain("Goal: complete");
+    expect(completed).toContain('data-goal-status="complete"');
+  });
 });

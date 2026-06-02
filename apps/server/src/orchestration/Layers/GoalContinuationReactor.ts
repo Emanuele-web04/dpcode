@@ -111,24 +111,29 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Commit to handling this turn exactly once.
-    lastHandledTurnId.set(threadId, latestTurn.turnId);
-
-    // Completion: the model emitted the sentinel after its completion audit.
-    if (assistantMessage.text.includes(ORCHESTRATION_GOAL_COMPLETION_SENTINEL)) {
+    // Completion: the model emitted the sentinel as the final line of its reply after the
+    // completion audit. Require an exact last-line match (not a substring) so quoting the
+    // sentinel in prose, a code block, or a blocker explanation does not falsely complete.
+    const lastLine = assistantMessage.text.trimEnd().split(/\r?\n/).at(-1)?.trim();
+    if (lastLine === ORCHESTRATION_GOAL_COMPLETION_SENTINEL) {
       yield* orchestrationEngine.dispatch({
         type: "thread.goal.complete",
         commandId: serverCommandId("goal-complete"),
         threadId,
         createdAt: new Date().toISOString(),
       });
+      // Goal is terminal now; drop the per-thread bookkeeping so the map cannot grow
+      // unboundedly across the server's lifetime.
+      lastHandledTurnId.delete(threadId);
       return;
     }
 
     // No-activity suppression: once continuations have started, a turn that produced no
     // tool activity means the agent is spinning. Stop until the user nudges it (mirrors
-    // pi-goal's no-tool continuation suppression).
+    // pi-goal's no-tool continuation suppression). This is a terminal decision for the
+    // turn, so record it as handled.
     if (goal.continuationCount > 0 && !turnHadToolActivity(thread, latestTurn.turnId)) {
+      lastHandledTurnId.set(threadId, latestTurn.turnId);
       yield* Effect.logDebug("goal continuation suppressed: no tool activity", {
         threadId,
         turnId: latestTurn.turnId,
@@ -152,6 +157,9 @@ const make = Effect.gen(function* () {
       dispatchMode: "queue",
       createdAt: new Date().toISOString(),
     });
+    // Only mark the turn handled after a successful dispatch; if the dispatch above
+    // fails the turn stays unhandled and a later trigger retries instead of stalling.
+    lastHandledTurnId.set(threadId, latestTurn.turnId);
   });
 
   const handleThreadSafely = (threadId: ThreadId) =>

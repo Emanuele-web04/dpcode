@@ -433,15 +433,13 @@ export function parseGoalSlashCommand(args: string): GoalSlashCommandAction {
   if (!trimmed) {
     return { kind: "status" };
   }
-  const firstWord = trimmed.split(/\s+/, 1)[0]?.toLowerCase();
-  if (
-    firstWord === "status" ||
-    firstWord === "pause" ||
-    firstWord === "resume" ||
-    firstWord === "clear" ||
-    firstWord === "complete"
-  ) {
-    return { kind: firstWord };
+  // Lifecycle subcommands only match when the entire argument is exactly the keyword, so an
+  // objective like "clear flaky tests" is treated as a create, not as `/goal clear`.
+  const lifecycleKind = (["status", "pause", "resume", "clear", "complete"] as const).find(
+    (keyword) => keyword === trimmed.toLowerCase(),
+  );
+  if (lifecycleKind) {
+    return { kind: lifecycleKind };
   }
 
   let objective = trimmed;

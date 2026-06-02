@@ -39,7 +39,7 @@ divergence from Codex canon and is intentionally _not_ part of v1.)
 | `GoalState` custom session entry                             | `OrchestrationGoal` on `OrchestrationThread.goal` (one per thread)                   |
 | `/goal` command + `create_goal`/`update_goal` tools          | `thread.goal.*` orchestration commands                                               |
 | hidden `pi-goal-continuation` user message (`display:false`) | `thread.turn.start` with `inputSource: "goal-continuation"` (the new contract field) |
-| `turn_end` accounting                                        | folded on `thread.turn-diff-completed` while a goal is active                        |
+| `turn_end` accounting                                        | folded on `thread.activity-appended` (kind `turn.completed`) while a goal is active  |
 | `scheduleContinuation` after `agent_end`                     | `GoalContinuationReactor` reacting to turn completion                                |
 | completion audit in `continuation.md`                        | ported verbatim into the continuation prompt; completion via sentinel                |
 

@@ -865,10 +865,15 @@ export function projectEvent(
             .toSorted(compareThreadActivities)
             .slice(-MAX_THREAD_ACTIVITIES);
 
-          // Accumulate goal turn/usage accounting when a turn completes.
+          // Accumulate goal turn/usage accounting when a turn completes. Only for a
+          // genuinely new activity — a replayed/re-upserted turn.completed (same activity
+          // id already present) must not double-count turns or usage.
           const goal = thread.goal;
+          const isNewTurnCompletion =
+            payload.activity.kind === "turn.completed" &&
+            !thread.activities.some((entry) => entry.id === payload.activity.id);
           const goalAccountingPatch =
-            goal && goal.status === "active" && payload.activity.kind === "turn.completed"
+            goal && goal.status === "active" && isNewTurnCompletion
               ? { goal: applyGoalTurnAccounting(goal, payload.activity.payload, event.occurredAt) }
               : {};
 
