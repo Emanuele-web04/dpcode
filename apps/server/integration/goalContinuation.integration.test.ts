@@ -152,7 +152,7 @@ it.live(
         const thread = yield* harness.waitForThread(
           THREAD_ID,
           (entry) => entry.goal?.status === "complete",
-          20_000,
+          15_000,
         );
 
         assert.equal(thread.goal?.status, "complete");

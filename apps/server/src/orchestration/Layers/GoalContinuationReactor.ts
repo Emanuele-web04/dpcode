@@ -39,13 +39,13 @@ const serverCommandId = (tag: string): CommandId =>
 const continuationMessageId = (): MessageId =>
   MessageId.makeUnsafe(`goal-continuation:${crypto.randomUUID()}`);
 
-// Prefer the assistant message produced by the just-completed turn; fall back to the
-// most recent assistant message if the turn id has not yet been stamped on it.
-function latestAssistantTextForTurn(thread: OrchestrationThread, turnId: TurnId): string {
-  const reversed = [...thread.messages].reverse();
-  const forTurn = reversed.find((entry) => entry.role === "assistant" && entry.turnId === turnId);
-  const fallback = reversed.find((entry) => entry.role === "assistant");
-  return (forTurn ?? fallback)?.text ?? "";
+// The assistant message produced by the just-completed turn. We require it to be present
+// before deciding, so sentinel detection reads the real final text rather than racing the
+// message's persistence into the projection.
+function findAssistantMessageForTurn(thread: OrchestrationThread, turnId: TurnId) {
+  return [...thread.messages]
+    .reverse()
+    .find((entry) => entry.role === "assistant" && entry.turnId === turnId);
 }
 
 function turnHadToolActivity(thread: OrchestrationThread, turnId: TurnId): boolean {
@@ -102,12 +102,20 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Require the completed turn's assistant message to be persisted before deciding. The
+    // turn-diff/session-set triggers can arrive before the message lands in the projection;
+    // acting early would read stale text and wrongly suppress the goal forever. Retry on
+    // the next trigger instead (without marking the turn handled).
+    const assistantMessage = findAssistantMessageForTurn(thread, latestTurn.turnId);
+    if (assistantMessage === undefined) {
+      return;
+    }
+
     // Commit to handling this turn exactly once.
     lastHandledTurnId.set(threadId, latestTurn.turnId);
 
     // Completion: the model emitted the sentinel after its completion audit.
-    const assistantText = latestAssistantTextForTurn(thread, latestTurn.turnId);
-    if (assistantText.includes(ORCHESTRATION_GOAL_COMPLETION_SENTINEL)) {
+    if (assistantMessage.text.includes(ORCHESTRATION_GOAL_COMPLETION_SENTINEL)) {
       yield* orchestrationEngine.dispatch({
         type: "thread.goal.complete",
         commandId: serverCommandId("goal-complete"),

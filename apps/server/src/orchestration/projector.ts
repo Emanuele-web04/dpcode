@@ -1,9 +1,4 @@
-import type {
-  OrchestrationEvent,
-  OrchestrationGoal,
-  OrchestrationReadModel,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -35,6 +30,11 @@ import {
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
+import {
+  applyGoalTurnAccounting,
+  incrementGoalContinuation,
+  transitionGoalStatus,
+} from "./goalProjection.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -66,78 +66,6 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
-}
-
-function goalElapsedSeconds(createdAt: string, completedAt: string): number {
-  const start = Date.parse(createdAt);
-  const end = Date.parse(completedAt);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    return 0;
-  }
-  return Math.floor((end - start) / 1000);
-}
-
-// Best-effort per-turn token usage extraction from a provider-shaped (Json) activity
-// payload. Mirrors pi-goal's tolerant `extractUsageAccounting`: providers report usage
-// under varying key names, so we probe a set of aliases and fall back to zero.
-function extractTurnUsageFromActivityPayload(payload: unknown): {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-} {
-  if (typeof payload !== "object" || payload === null) {
-    return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-  }
-  const nested = (payload as { usage?: unknown }).usage;
-  const source = (
-    typeof nested === "object" && nested !== null ? nested : payload
-  ) as Record<string, unknown>;
-  const num = (...keys: ReadonlyArray<string>): number => {
-    for (const key of keys) {
-      const value = source[key];
-      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-        return Math.floor(value);
-      }
-    }
-    return 0;
-  };
-  const inputTokens = num("inputTokens", "input", "promptTokens", "input_tokens", "prompt_tokens");
-  const outputTokens = num(
-    "outputTokens",
-    "output",
-    "completionTokens",
-    "output_tokens",
-    "completion_tokens",
-  );
-  const explicitTotal = num("totalTokens", "total", "total_tokens");
-  const totalTokens = explicitTotal > 0 ? explicitTotal : inputTokens + outputTokens;
-  return { inputTokens, outputTokens, totalTokens };
-}
-
-// Fold a completed turn into the active goal: increment turn count, accumulate usage,
-// refresh elapsed time, and trip the budget guard. Mirrors pi-goal's `turn_end` handler.
-function applyGoalTurnAccounting(
-  goal: OrchestrationGoal,
-  activityPayload: unknown,
-  occurredAt: string,
-): OrchestrationGoal {
-  const delta = extractTurnUsageFromActivityPayload(activityPayload);
-  const tokensUsed = goal.tokensUsed + delta.totalTokens;
-  const usage = {
-    inputTokens: goal.usage.inputTokens + delta.inputTokens,
-    outputTokens: goal.usage.outputTokens + delta.outputTokens,
-    totalTokens: goal.usage.totalTokens + delta.totalTokens,
-  };
-  const budgetExhausted = goal.tokenBudget !== null && tokensUsed >= goal.tokenBudget;
-  return {
-    ...goal,
-    status: budgetExhausted ? "budget_limited" : goal.status,
-    tokensUsed,
-    usage,
-    turnCount: goal.turnCount + 1,
-    timeUsedSeconds: goalElapsedSeconds(goal.createdAt, occurredAt),
-    updatedAt: occurredAt,
-  };
 }
 
 function decodeForEvent<A>(
@@ -627,13 +555,7 @@ export function projectEvent(
         const goal = thread.goal;
         const goalContinuationPatch =
           goal && goal.status === "active" && payload.source === "goal-continuation"
-            ? {
-                goal: {
-                  ...goal,
-                  continuationCount: goal.continuationCount + 1,
-                  updatedAt: event.occurredAt,
-                },
-              }
+            ? { goal: incrementGoalContinuation(goal, event.occurredAt) }
             : {};
 
         return {
@@ -999,7 +921,7 @@ export function projectEvent(
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
-              goal: { ...thread.goal, status: nextStatus, updatedAt: payload.updatedAt },
+              goal: transitionGoalStatus(thread.goal, nextStatus, payload.updatedAt),
               updatedAt: event.occurredAt,
             }),
           };
