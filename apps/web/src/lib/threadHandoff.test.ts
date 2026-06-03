@@ -10,6 +10,7 @@ import {
   resolveThreadHandoffModelSelection,
   resolveThreadOutgoingHandoffLabel,
   resolveThreadOutgoingHandoffTooltip,
+  type ThreadHandoffLink,
 } from "./threadHandoff";
 import type { Thread } from "../types";
 
@@ -25,30 +26,28 @@ function makePreviewThread(input?: {
       provider: "codex",
       model: "gpt-5",
     },
-    messages:
-      input?.messages ??
-      [
-        {
-          id: MessageId.makeUnsafe("msg-user-preview"),
-          role: "user",
-          text: "Please fix the auth loop.\n\n<assistant_selection>\n- assistant message msg-assistant-1:\n  Internal selected quote\n</assistant_selection>",
-          turnId: null,
-          createdAt: "2026-06-03T12:00:00.000Z",
-          completedAt: "2026-06-03T12:00:01.000Z",
-          streaming: false,
-          source: "native",
-        },
-        {
-          id: MessageId.makeUnsafe("msg-assistant-preview"),
-          role: "assistant",
-          text: "I traced it to the redirect guard.",
-          turnId: null,
-          createdAt: "2026-06-03T12:00:02.000Z",
-          completedAt: "2026-06-03T12:00:03.000Z",
-          streaming: false,
-          source: "native",
-        },
-      ],
+    messages: input?.messages ?? [
+      {
+        id: MessageId.makeUnsafe("msg-user-preview"),
+        role: "user",
+        text: "Please fix the auth loop.\n\n<assistant_selection>\n- assistant message msg-assistant-1:\n  Internal selected quote\n</assistant_selection>",
+        turnId: null,
+        createdAt: "2026-06-03T12:00:00.000Z",
+        completedAt: "2026-06-03T12:00:01.000Z",
+        streaming: false,
+        source: "native",
+      },
+      {
+        id: MessageId.makeUnsafe("msg-assistant-preview"),
+        role: "assistant",
+        text: "I traced it to the redirect guard.",
+        turnId: null,
+        createdAt: "2026-06-03T12:00:02.000Z",
+        completedAt: "2026-06-03T12:00:03.000Z",
+        streaming: false,
+        source: "native",
+      },
+    ],
   };
 }
 
@@ -156,7 +155,7 @@ describe("threadHandoff", () => {
       sourceThreadId: sourceThread.id,
       sourceProvider: "codex",
       importedAt: "2026-06-03T12:00:00.000Z",
-    };
+    } satisfies ThreadHandoffLink;
 
     expect(resolveThreadHandoffBadgeLabel(targetThread)).toBe("Continued from Codex");
     expect(resolveThreadOutgoingHandoffLabel(outgoingLink)).toBe("Continued with Claude");
@@ -231,10 +230,7 @@ describe("threadHandoff", () => {
       ],
     });
 
-    expect(links.map((link) => link.threadId)).toEqual([
-      "thread-new-target",
-      "thread-old-target",
-    ]);
+    expect(links.map((link) => link.threadId)).toEqual(["thread-new-target", "thread-old-target"]);
     expect(resolvePrimaryOutgoingThreadHandoffLink(links)?.title).toBe("Newer target");
   });
 
@@ -289,7 +285,7 @@ describe("threadHandoff", () => {
       latestUserMessageText: "continue with this prompt",
     });
 
-    expect(preview).toContain("This conversation was handed off from codex.");
+    expect(preview).toContain("This conversation was handed off from Codex.");
     expect(preview).toContain("Original conversation title: Preview handoff");
     expect(preview).toContain("Git branch: feature/preview");
     expect(preview).toContain("Please fix the auth loop.");

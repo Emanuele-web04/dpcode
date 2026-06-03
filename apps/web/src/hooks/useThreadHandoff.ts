@@ -49,11 +49,8 @@ export function useThreadHandoff() {
       if (!canCreateThreadHandoff({ thread })) {
         throw new Error("This thread cannot be handed off yet.");
       }
-      if (
-        !resolveAvailableHandoffTargetProviders(thread.modelSelection.provider).includes(
-          targetProvider,
-        )
-      ) {
+      const sourceProvider = thread.session?.provider ?? thread.modelSelection.provider;
+      if (!resolveAvailableHandoffTargetProviders(sourceProvider).includes(targetProvider)) {
         throw new Error("This handoff target is not available for the current thread.");
       }
       const targetStatus = normalizeProviderStatusForLocalConfig({

@@ -17,7 +17,6 @@ import {
   type ProviderSkillReference,
   type ProviderStartOptions,
   type ProviderUserInputAnswers,
-  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -1255,10 +1254,9 @@ export default function ChatView({
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [providerHandoffTarget, setProviderHandoffTarget] = useState<ProviderKind | null>(null);
   const [providerHandoffPreviewOpen, setProviderHandoffPreviewOpen] = useState(false);
-  const {
-    copyToClipboard: copyProviderHandoffPreview,
-    isCopied: isProviderHandoffPreviewCopied,
-  } = useCopyToClipboard();
+  const [providerHandoffConfirming, setProviderHandoffConfirming] = useState(false);
+  const { copyToClipboard: copyProviderHandoffPreview, isCopied: isProviderHandoffPreviewCopied } =
+    useCopyToClipboard();
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, homeDir);
   const activeProjectDisplayName = isHomeChatContainer
     ? activeProject?.folderName
@@ -2731,18 +2729,14 @@ export default function ChatView({
         : [],
     [activeThread, handoffLinkThreads],
   );
-  const handoffTargetProviders = useMemo(
-    () =>
-      activeThread
-        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider).filter(
-            (provider) =>
-              isProviderUsable(
-                providerStatuses.find((status) => status.provider === provider) ?? null,
-              ),
-          )
-        : [],
-    [activeThread, providerStatuses],
-  );
+  const handoffTargetProviders = useMemo(() => {
+    const sourceProvider = lockedProvider ?? activeThread?.modelSelection.provider ?? null;
+    return sourceProvider
+      ? resolveAvailableHandoffTargetProviders(sourceProvider).filter((provider) =>
+          isProviderUsable(providerStatuses.find((status) => status.provider === provider) ?? null),
+        )
+      : [];
+  }, [activeThread?.modelSelection.provider, lockedProvider, providerStatuses]);
   const providerHandoffBlockedReason = useMemo(() => {
     if (!activeThread || !isServerThread) {
       return "Saved threads only";
@@ -2783,7 +2777,7 @@ export default function ChatView({
       return [];
     }
     const hiddenProviders = new Set(settings.hiddenProviders);
-    return resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider)
+    return resolveAvailableHandoffTargetProviders(lockedProvider)
       .filter((provider) => !hiddenProviders.has(provider))
       .sort((left, right) => compareProvidersByOrder(settings.providerOrder ?? [], left, right))
       .map((provider) => {
@@ -5194,9 +5188,9 @@ export default function ChatView({
   );
 
   const onCreateHandoffThread = useCallback(
-    async (targetProvider: ProviderKind) => {
+    async (targetProvider: ProviderKind): Promise<boolean> => {
       if (!activeThread || handoffDisabled) {
-        return;
+        return false;
       }
 
       try {
@@ -5207,9 +5201,10 @@ export default function ChatView({
             type: "error",
             title: providerUnavailableReason(targetStatus),
           });
-          return;
+          return false;
         }
         await createThreadHandoff(activeThread, targetProvider);
+        return true;
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -5219,27 +5214,39 @@ export default function ChatView({
               ? error.message
               : "An error occurred while creating the handoff thread.",
         });
+        return false;
       }
     },
     [activeThread, createThreadHandoff, handoffDisabled, providerStatuses],
   );
   const onProviderHandoffRequest = useCallback((targetProvider: ProviderKind) => {
     setProviderHandoffPreviewOpen(false);
+    setProviderHandoffConfirming(false);
     setProviderHandoffTarget(targetProvider);
   }, []);
   const closeProviderHandoffDialog = useCallback(() => {
+    if (providerHandoffConfirming) {
+      return;
+    }
     setProviderHandoffTarget(null);
     setProviderHandoffPreviewOpen(false);
-  }, []);
+  }, [providerHandoffConfirming]);
   const confirmProviderHandoff = useCallback(async () => {
-    if (!providerHandoffTarget) {
+    if (!providerHandoffTarget || providerHandoffConfirming) {
       return;
     }
     const targetProvider = providerHandoffTarget;
-    setProviderHandoffTarget(null);
-    setProviderHandoffPreviewOpen(false);
-    await onCreateHandoffThread(targetProvider);
-  }, [onCreateHandoffThread, providerHandoffTarget]);
+    setProviderHandoffConfirming(true);
+    try {
+      const created = await onCreateHandoffThread(targetProvider);
+      if (created) {
+        setProviderHandoffTarget(null);
+        setProviderHandoffPreviewOpen(false);
+      }
+    } finally {
+      setProviderHandoffConfirming(false);
+    }
+  }, [onCreateHandoffThread, providerHandoffConfirming, providerHandoffTarget]);
   const providerHandoffDraftCopy = useMemo(
     () =>
       buildProviderHandoffDraftTransferCopy({
@@ -8284,6 +8291,7 @@ export default function ChatView({
         contextPreview={providerHandoffContextPreview}
         contextPreviewOpen={providerHandoffPreviewOpen}
         isContextPreviewCopied={isProviderHandoffPreviewCopied}
+        isConfirming={providerHandoffConfirming}
         onContextPreviewOpenChange={setProviderHandoffPreviewOpen}
         onCopyContextPreview={(preview) => copyProviderHandoffPreview(preview, undefined)}
         onCancel={closeProviderHandoffDialog}

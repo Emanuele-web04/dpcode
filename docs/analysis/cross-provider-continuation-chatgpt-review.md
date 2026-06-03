@@ -13,6 +13,10 @@ This is intentionally not same-thread provider switching. The original provider 
 ## What Changed
 
 - Extracted provider handoff confirmation UI into `ProviderHandoffDialog`.
+- Updated the dialog title/body to explicitly say Synara creates a new linked thread.
+- Added an in-flight confirm guard so rapid repeated confirmation cannot dispatch duplicate handoffs.
+- Made picker target derivation and `useThreadHandoff` target validation source-consistent with the effective session-bound provider.
+- Changed handoff bootstrap text to use provider display names instead of raw provider ids.
 - Kept handoff state, preview state, copy state, and command dispatch ownership in `ChatView`.
 - Added context-preview disclosure browser coverage for collapsed state, expansion, copy, image-copy notice, queued-turn warning, Cancel, and Continue callbacks.
 - Preserved current draft transfer behavior from V2: prompt, assistant selections, terminal contexts, and current images copy to the target draft; queued follow-ups stay on the source thread.
@@ -55,23 +59,25 @@ Passed:
 - `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH bun install --frozen-lockfile`
 - `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH bun run test src/lib/threadHandoff.test.ts src/components/chat/ChatHeader.test.ts src/components/Sidebar.logic.test.ts src/components/ChatView.logic.test.ts src/composerDraftStore.test.ts` from `apps/web`
   - 5 files, 197 tests passed.
-- `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH PORT=58127 bun run test:browser src/components/chat/ProviderHandoffDialog.browser.tsx --api 58128 --reporter=verbose --testTimeout 30000 --hookTimeout 30000 --teardownTimeout 30000` from `apps/web`
-  - 1 file, 3 tests passed.
-- `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH PORT=58111 bun run test:browser src/components/chat/ProviderModelPicker.browser.tsx --api 58112 --reporter=verbose --testTimeout 10000 --hookTimeout 10000 --teardownTimeout 10000` from `apps/web`
-  - 1 file, 18 tests passed.
+- `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH PORT=58121 bun run test:browser src/components/chat/ProviderHandoffDialog.browser.tsx src/components/chat/ProviderModelPicker.browser.tsx --api 58122 --reporter=verbose --testTimeout 10000 --hookTimeout 10000 --teardownTimeout 10000` from `apps/web`
+  - 2 files, 22 Chromium tests passed.
 - `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH bun run test` from `packages/shared`
   - 14 files, 141 tests passed.
 - `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH bun run test src/orchestration/Layers/ProviderCommandReactor.test.ts src/orchestration/decider.projectScripts.test.ts` from `apps/server`
   - 2 files, 58 tests passed. Node emitted the existing experimental SQLite warning.
-- `git -c core.fsmonitor=false diff --check -- ...` with explicit V1-V5 handoff paths
+- `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH bun run typecheck` from repo root
+  - 8 workspace packages passed. Existing TS44 advisory messages appeared in non-handoff files.
+- `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH bun run fmt:check` from repo root
+  - Passed.
+- `PATH=/Users/joegarbarino/.hermes/node/bin:$PATH bun run lint` from repo root
+  - Exited 0 with existing warnings.
+- `git diff --check`
   - Passed.
 
 Blocked or skipped:
 
-- Focused `ChatView.browser.tsx` handoff-flow coverage was attempted but not retained. The focused run stayed at `Loading projects...` and could not mount `[data-testid="composer-editor"]`; the neighboring pre-existing `"opens the composer model picker"` focused run failed the same way, so this appears to be a ChatView browser hydration/MSW issue rather than a handoff-specific regression.
-- Final browser reruns later failed before test import with Vite/Babel dependency-resolution errors: `Yallist is not a constructor` and `_browserslist.findConfigFile is not a function`. Direct inspection showed installed `browserslist@4.28.1` does not expose `findConfigFile`. Earlier dialog and picker browser passes are recorded above.
-- Broad `git status` / `git diff` scans hung locally after dependency install, apparently due Git/fsmonitor scanning. Intended file inspection used explicit untracked/path checks instead.
-- `bun fmt`, `bun lint`, and `bun typecheck` were skipped per the V5 plan and repo instruction.
+- Full `ChatView.browser.tsx` handoff-flow coverage was attempted but not retained because the file is not a reliable passing signal in this local environment. Focused runs blank before app bootstrap; the neighboring pre-existing `"opens the composer model picker with Cmd+Shift+M"` focused run also fails to mount `[data-testid="composer-editor"]`; a full-file run began failing at the first old timeline test with no chat scroll container. This is recorded as a harness/hydration blocker, not product proof.
+- Broad `git status` hung locally earlier in the V5 worktree. `git diff --name-only`, `git diff --stat`, and `git diff --check` completed.
 
 ## Known Limitations
 
@@ -102,6 +108,7 @@ V6 is the future same-thread provider segment architecture. It should not start 
 1. Does the dialog/component split keep the right boundary: UI in `ProviderHandoffDialog`, state and command dispatch in `ChatView`?
 2. Is the linked-handoff product copy honest enough about what transfers and what does not?
 3. Are the source/target continuation labels and tooltips clear without making the sidebar too noisy?
-4. Is the V2 image draft-copy policy safe enough, or should V6 or a later linked-handoff polish add provider capability gating before send?
-5. Does the shared `@t3tools/shared/handoffContext` API look stable enough, or should the naming/budget helper be adjusted before merge?
-6. What is the best way to restore reliable full `ChatView.browser.tsx` handoff-flow coverage, given the focused-run project hydration blocker?
+4. Does the session-bound source-provider handling cover the edge where thread model selection differs from the active provider session?
+5. Is the V2 image draft-copy policy safe enough, or should V6 or a later linked-handoff polish add provider capability gating before send?
+6. Does the shared `@t3tools/shared/handoffContext` API look stable enough, or should the naming/budget helper be adjusted before merge?
+7. What is the best way to restore reliable full `ChatView.browser.tsx` handoff-flow coverage, given the focused-run project hydration blocker?

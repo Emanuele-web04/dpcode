@@ -73,8 +73,7 @@ export function buildProviderHandoffDraftTransferCopy(input: {
 } {
   return {
     imageCopyNotice: input.hasCurrentImages ? PROVIDER_HANDOFF_IMAGE_COPY_NOTICE : null,
-    warnings:
-      input.queuedTurnCount > 0 ? [PROVIDER_HANDOFF_QUEUED_TURNS_STAY_WARNING] : [],
+    warnings: input.queuedTurnCount > 0 ? [PROVIDER_HANDOFF_QUEUED_TURNS_STAY_WARNING] : [],
   };
 }
 

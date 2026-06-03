@@ -54,8 +54,9 @@ export function SidebarMetaChipStack({
   }
   if (chips.length === 1) {
     const only = chips[0]!;
+    const clickProps = only.onClick ? { onClick: only.onClick } : {};
     return (
-      <SidebarMetaChip tooltip={only.tooltip} onClick={only.onClick}>
+      <SidebarMetaChip tooltip={only.tooltip} {...clickProps}>
         {only.icon}
       </SidebarMetaChip>
     );

@@ -9,6 +9,7 @@ import {
   FolderIcon,
   GitMergedSimpleIcon,
   GitPullRequestIcon,
+  HandoffIcon,
   DisposableThreadIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -4065,7 +4066,7 @@ export default function Sidebar() {
       sourceThread: thread,
       threads: sidebarThreads,
     });
-    const outgoingHandoffLink = outgoingHandoffLinks[0];
+    const outgoingHandoffLink = outgoingHandoffLinks[0] ?? null;
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
       outgoingHandoffLink,
@@ -4265,7 +4266,7 @@ export default function Sidebar() {
       sourceThread: thread,
       threads: sidebarThreads,
     });
-    const outgoingHandoffLink = outgoingHandoffLinks[0];
+    const outgoingHandoffLink = outgoingHandoffLinks[0] ?? null;
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
       outgoingHandoffLink,

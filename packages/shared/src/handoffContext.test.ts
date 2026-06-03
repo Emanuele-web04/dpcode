@@ -22,7 +22,7 @@ describe("handoffContext", () => {
       ],
     });
 
-    expect(text).toContain("This conversation was handed off from codex.");
+    expect(text).toContain("This conversation was handed off from Codex.");
     expect(text).toContain("Original conversation title: Fix login redirect");
     expect(text).toContain("Git branch: feature/login");
     expect(text).toContain("Worktree path: /repo/.worktrees/login");

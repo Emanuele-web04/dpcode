@@ -341,7 +341,11 @@ export const ChatHeader = memo(function ChatHeader({
                           {outgoingHandoffTooltip ?? outgoingHandoffLabel}
                         </TooltipPopup>
                       </Tooltip>
-                      <ComposerPickerMenuPopup align="start" side="bottom" className="w-64 min-w-64">
+                      <ComposerPickerMenuPopup
+                        align="start"
+                        side="bottom"
+                        className="w-64 min-w-64"
+                      >
                         {outgoingHandoffLinks.map((link) => (
                           <MenuItem
                             key={link.threadId}

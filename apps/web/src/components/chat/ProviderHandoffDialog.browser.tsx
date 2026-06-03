@@ -17,6 +17,7 @@ async function renderProviderHandoffDialog(
     contextPreview: "Context packet preview text",
     contextPreviewOpen: false,
     isContextPreviewCopied: false,
+    isConfirming: false,
     onContextPreviewOpenChange: vi.fn(),
     onCopyContextPreview: vi.fn(),
     onCancel: vi.fn(),
@@ -56,10 +57,14 @@ describe("ProviderHandoffDialog", () => {
 
     try {
       await expect
-        .element(page.getByRole("heading", { name: "Continue this conversation with Claude?" }))
+        .element(page.getByRole("heading", { name: "Create a linked continuation with Claude?" }))
         .toBeInTheDocument();
       await expect
-        .element(page.getByText("Claude will receive a compact context packet from this thread."))
+        .element(
+          page.getByText(
+            "Synara will create a new linked thread. Claude receives a compact context packet from this conversation.",
+          ),
+        )
         .toBeInTheDocument();
       await expect
         .element(page.getByText("The original Codex session will stay unchanged."))
@@ -105,6 +110,17 @@ describe("ProviderHandoffDialog", () => {
 
       findButtonByText("Continue with Claude").click();
       expect(props.onConfirm).toHaveBeenCalledTimes(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("disables dialog actions while the handoff is being created", async () => {
+    const { screen } = await renderProviderHandoffDialog({ isConfirming: true });
+
+    try {
+      expect(findButtonByText("Cancel").disabled).toBe(true);
+      expect(findButtonByText("Creating...").disabled).toBe(true);
     } finally {
       await screen.unmount();
     }

@@ -26,6 +26,7 @@ export interface ProviderHandoffDialogProps {
   contextPreview: string | null;
   contextPreviewOpen: boolean;
   isContextPreviewCopied: boolean;
+  isConfirming: boolean;
   onContextPreviewOpenChange: (open: boolean) => void;
   onCopyContextPreview: (preview: string) => void;
   onCancel: () => void;
@@ -41,6 +42,7 @@ export function ProviderHandoffDialog({
   contextPreview,
   contextPreviewOpen,
   isContextPreviewCopied,
+  isConfirming,
   onContextPreviewOpenChange,
   onCopyContextPreview,
   onCancel,
@@ -56,7 +58,7 @@ export function ProviderHandoffDialog({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen) {
+        if (!nextOpen && !isConfirming) {
           onCancel();
         }
       }}
@@ -65,13 +67,13 @@ export function ProviderHandoffDialog({
         <DialogHeader>
           <DialogTitle>
             {targetLabel
-              ? `Continue this conversation with ${targetLabel}?`
-              : "Continue this conversation?"}
+              ? `Create a linked continuation with ${targetLabel}?`
+              : "Create a linked continuation?"}
           </DialogTitle>
           <DialogDescription>
             {targetLabel
-              ? `${targetLabel} will receive a compact context packet from this thread.`
-              : "The target provider will receive a compact context packet from this thread."}
+              ? `Synara will create a new linked thread. ${targetLabel} receives a compact context packet from this conversation.`
+              : "Synara will create a new linked thread. The target provider receives a compact context packet from this conversation."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
@@ -152,11 +154,15 @@ export function ProviderHandoffDialog({
           ) : null}
         </DialogPanel>
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onCancel}>
+          <Button variant="outline" size="sm" onClick={onCancel} disabled={isConfirming}>
             Cancel
           </Button>
-          <Button size="sm" onClick={onConfirm}>
-            {targetLabel ? `Continue with ${targetLabel}` : "Continue"}
+          <Button size="sm" onClick={onConfirm} disabled={isConfirming}>
+            {isConfirming
+              ? "Creating..."
+              : targetLabel
+                ? `Continue with ${targetLabel}`
+                : "Continue"}
           </Button>
         </DialogFooter>
       </DialogPopup>

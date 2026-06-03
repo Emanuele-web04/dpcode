@@ -4,6 +4,7 @@
 // Depends on: orchestration contracts
 
 import {
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type OrchestrationMessage,
   type OrchestrationThread,
@@ -179,10 +180,11 @@ export function buildHandoffBootstrapTextFromImportedMessages(input: {
   sourceProvider: ProviderKind;
   maxChars?: number;
 }): string | null {
+  const sourceProviderLabel = PROVIDER_DISPLAY_NAMES[input.sourceProvider];
   return buildImportedMessagesBootstrapText({
     thread: input.thread,
     importedMessages: input.importedMessages,
-    intro: `This conversation was handed off from ${input.sourceProvider}.`,
+    intro: `This conversation was handed off from ${sourceProviderLabel}.`,
     maxChars: input.maxChars ?? HANDOFF_BOOTSTRAP_CHAR_BUDGET,
   });
 }
