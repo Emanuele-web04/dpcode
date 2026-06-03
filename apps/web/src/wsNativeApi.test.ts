@@ -300,6 +300,7 @@ describe("wsNativeApi", () => {
             serverPassword: "",
             customModels: [],
           },
+          devin: { enabled: true, binaryPath: "devin", customModels: [] },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
       },

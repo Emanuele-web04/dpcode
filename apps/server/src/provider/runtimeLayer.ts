@@ -8,6 +8,7 @@ import { ProviderUnsupportedError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
+import { makeDevinAdapterLive } from "./Layers/DevinAdapter";
 import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeGeminiAdapterLive } from "./Layers/GeminiAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
@@ -70,11 +71,13 @@ export function makeServerProviderLayer(): Layer.Layer<
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    const devinAdapterLayer = makeDevinAdapterLive();
     const piAdapterLayer = makePiAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined);
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
       Layer.provide(cursorAdapterLayer),
+      Layer.provide(devinAdapterLayer),
       Layer.provide(geminiAdapterLayer),
       Layer.provide(grokAdapterLayer),
       Layer.provide(kiloAdapterLayer),

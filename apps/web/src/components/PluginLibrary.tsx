@@ -88,6 +88,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "grok",
   "kilo",
   "opencode",
+  "devin",
   "pi",
 ];
 const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
@@ -392,6 +393,7 @@ export function PluginLibrary() {
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
+  const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
 
   const providerCapabilities = useMemo<Record<ProviderKind, ProviderCapabilities>>(
@@ -424,6 +426,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
       },
+      devin: {
+        plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(devinCapabilitiesQuery.data),
+      },
       pi: {
         plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(piCapabilitiesQuery.data),
@@ -437,6 +443,7 @@ export function PluginLibrary() {
       grokCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
+      devinCapabilitiesQuery.data,
       piCapabilitiesQuery.data,
     ],
   );

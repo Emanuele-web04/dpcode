@@ -155,6 +155,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           kilo: [],
           opencode: [],
+          devin: [],
           pi: [],
         },
         "galapagos-alpha",
@@ -174,6 +175,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           kilo: [],
           opencode: [],
+          devin: [],
           pi: [],
         },
         "",
@@ -193,6 +195,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           kilo: [],
           opencode: [],
+          devin: [],
           pi: [],
         },
         "GPT-5.3 Codex",
@@ -212,6 +215,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           kilo: [],
           opencode: [],
+          devin: [],
           pi: [],
         },
         "sonnet",
@@ -231,6 +235,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           kilo: [],
           opencode: [],
+          devin: [],
           pi: [],
         },
         "custom/selected-model",
@@ -322,6 +327,7 @@ describe("getProviderStartOptions", () => {
         openCodeBinaryPath: "",
         openCodeServerPassword: "",
         openCodeServerUrl: "",
+        devinBinaryPath: "",
         piAgentDir: "",
         piBinaryPath: "",
       }),
@@ -361,6 +367,7 @@ describe("getProviderStartOptions", () => {
         openCodeBinaryPath: "",
         openCodeServerPassword: "",
         openCodeServerUrl: "",
+        devinBinaryPath: "",
         piAgentDir: "",
         piBinaryPath: "",
       }),
@@ -377,6 +384,7 @@ describe("provider-indexed custom model settings", () => {
     customGrokModels: ["grok/custom-fast"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+    customDevinModels: ["sonnet"],
     customPiModels: ["anthropic/custom-pi"],
   } as const;
 
@@ -385,6 +393,7 @@ describe("provider-indexed custom model settings", () => {
       "codex",
       "claudeAgent",
       "cursor",
+      "devin",
       "gemini",
       "grok",
       "kilo",
@@ -401,6 +410,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
+    expect(getCustomModelsForProvider(settings, "devin")).toEqual(["sonnet"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
   });
 
@@ -413,6 +423,7 @@ describe("provider-indexed custom model settings", () => {
       customGrokModels: ["grok/default-fast"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
+      customDevinModels: ["opus"],
       customPiModels: ["anthropic/default-pi"],
     } as const;
 
@@ -425,6 +436,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "devin")).toEqual(["opus"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
   });
 
@@ -476,6 +488,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for devin", () => {
+    expect(patchCustomModels("devin", ["sonnet"])).toEqual({
+      customDevinModels: ["sonnet"],
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -485,6 +503,7 @@ describe("provider-indexed custom model settings", () => {
       grok: ["grok/custom-fast"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
+      devin: ["sonnet"],
       pi: ["anthropic/custom-pi"],
     });
   });
@@ -513,6 +532,7 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toBe(true);
+    expect(modelOptionsByProvider.devin.some((option) => option.slug === "sonnet")).toBe(true);
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
       true,
     );
@@ -531,6 +551,7 @@ describe("provider-indexed custom model settings", () => {
         "openrouter/gpt-oss-120b",
         "openrouter/gpt-oss-120b",
       ],
+      customDevinModels: [" sonnet ", "devin/custom-model", "devin/custom-model"],
       customPiModels: [
         " anthropic/claude-sonnet-4-5 ",
         "anthropic/custom-pi",
@@ -571,6 +592,9 @@ describe("provider-indexed custom model settings", () => {
       modelOptionsByProvider.opencode.filter((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toHaveLength(1);
     expect(
+      modelOptionsByProvider.devin.filter((option) => option.slug === "devin/custom-model"),
+    ).toHaveLength(1);
+    expect(
       modelOptionsByProvider.pi.filter((option) => option.slug === "anthropic/custom-pi"),
     ).toHaveLength(1);
   });
@@ -608,6 +632,7 @@ describe("AppSettingsSchema", () => {
       customGrokModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
+      customDevinModels: [],
       customPiModels: [],
     });
   });

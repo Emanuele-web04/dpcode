@@ -489,6 +489,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
     case "opencode":
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
+    case "devin":
+      return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
     case "cursor":
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
     case "pi":
@@ -1455,6 +1457,7 @@ export default function ChatView({
       grok: resolveHint("grok"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
+      devin: resolveHint("devin"),
       pi: resolveHint("pi"),
     };
   }, [
@@ -1507,6 +1510,13 @@ export default function ChatView({
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
       enabled: selectedProvider === "pi" || lockedProvider === "pi" || isModelPickerOpen,
+    }),
+  );
+  const devinDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "devin",
+      binaryPath: settings.devinBinaryPath || null,
+      enabled: selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen,
     }),
   );
   const claudeDynamicAgentsQuery = useQuery(
@@ -1578,6 +1588,11 @@ export default function ChatView({
         customModelsByProvider.opencode,
         composerModelHintByProvider.opencode,
       ),
+      devin: getAppModelOptions(
+        "devin",
+        customModelsByProvider.devin,
+        composerModelHintByProvider.devin,
+      ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, composerModelHintByProvider.pi),
     };
     const result: Record<
@@ -1596,6 +1611,7 @@ export default function ChatView({
       grok: grokDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
+      devin: devinDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
     };
 
@@ -1607,6 +1623,7 @@ export default function ChatView({
       "grok",
       "kilo",
       "opencode",
+      "devin",
       "pi",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
@@ -1636,6 +1653,7 @@ export default function ChatView({
     cursorDynamicModelsQuery.data,
     cursorRuntimeModels,
     customModelsByProvider,
+    devinDynamicModelsQuery.data,
     geminiModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
@@ -1659,12 +1677,14 @@ export default function ChatView({
       grok: grokDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
+      devin: devinDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
     }),
     [
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
+      devinDynamicModelsQuery.data?.models,
       geminiModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
@@ -1680,6 +1700,7 @@ export default function ChatView({
     grok: grokDynamicModelsQuery,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
+    devin: devinDynamicModelsQuery,
     pi: piDynamicModelsQuery,
   } as const;
   const selectedRuntimeModel = useMemo(
