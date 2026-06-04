@@ -139,6 +139,7 @@ const PROVIDER_SELECT_OPTIONS = [
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "gemini",
   "grok",
   "opencode",
@@ -167,6 +168,7 @@ type InstallBinarySettingsKey =
   | "claudeBinaryPath"
   | "codexBinaryPath"
   | "cursorBinaryPath"
+  | "devinBinaryPath"
   | "geminiBinaryPath"
   | "grokBinaryPath"
   | "kiloBinaryPath"
@@ -205,6 +207,7 @@ const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title
   { provider: "codex", title: PROVIDER_DISPLAY_NAMES.codex },
   { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
   { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
+  { provider: "devin", title: PROVIDER_DISPLAY_NAMES.devin },
   { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
   { provider: "grok", title: PROVIDER_DISPLAY_NAMES.grok },
   { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
@@ -326,6 +329,24 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     apiEndpointKey: "cursorApiEndpoint",
     apiEndpointPlaceholder: "https://api2.cursor.sh",
     apiEndpointDescription: "Optional Cursor API endpoint override passed to `cursor-agent -e`.",
+  },
+  {
+    provider: "devin",
+    title: "Devin",
+    docs: [
+      { label: "Install", href: "https://cli.devin.ai/docs/installation" },
+      { label: "Auth", href: "https://cli.devin.ai/docs/reference/commands" },
+      { label: "Commands", href: "https://cli.devin.ai/docs/reference/commands" },
+    ],
+    binaryPathKey: "devinBinaryPath",
+    binaryPlaceholder: "Devin binary path",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>devin</code> from your PATH. Requires Devin CLI installed and
+        authenticated with <code>devin auth login</code>. Model availability depends on your
+        Devin/Windsurf account/team settings.
+      </>
+    ),
   },
   {
     provider: "gemini",
@@ -557,6 +578,7 @@ function SettingsRouteView() {
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
+    devin: Boolean(settings.devinBinaryPath),
     gemini: Boolean(settings.geminiBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
     kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
@@ -579,6 +601,7 @@ function SettingsRouteView() {
     codex: "",
     claudeAgent: "",
     cursor: "",
+    devin: "",
     gemini: "",
     grok: "",
     kilo: "",
@@ -626,6 +649,7 @@ function SettingsRouteView() {
   const claudeBinaryPath = settings.claudeBinaryPath;
   const cursorBinaryPath = settings.cursorBinaryPath;
   const cursorApiEndpoint = settings.cursorApiEndpoint;
+  const devinBinaryPath = settings.devinBinaryPath;
   const geminiBinaryPath = settings.geminiBinaryPath;
   const grokBinaryPath = settings.grokBinaryPath;
   const kiloBinaryPath = settings.kiloBinaryPath;
@@ -730,6 +754,7 @@ function SettingsRouteView() {
     settings.customCodexModels.length +
     settings.customClaudeModels.length +
     settings.customCursorModels.length +
+    settings.customDevinModels.length +
     settings.customGeminiModels.length +
     settings.customGrokModels.length +
     settings.customKiloModels.length +
@@ -750,6 +775,7 @@ function SettingsRouteView() {
     settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
     settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
     settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
+    settings.devinBinaryPath !== defaults.devinBinaryPath ||
     settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
     settings.grokBinaryPath !== defaults.grokBinaryPath ||
     settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
@@ -996,6 +1022,7 @@ function SettingsRouteView() {
       codex: false,
       claudeAgent: false,
       cursor: false,
+      devin: false,
       gemini: false,
       grok: false,
       kilo: false,
@@ -1007,6 +1034,7 @@ function SettingsRouteView() {
       codex: "",
       claudeAgent: "",
       cursor: "",
+      devin: "",
       gemini: "",
       grok: "",
       kilo: "",
@@ -2382,6 +2410,7 @@ function SettingsRouteView() {
                     openCodeExperimentalWebSockets: defaults.openCodeExperimentalWebSockets,
                     openCodeServerUrl: defaults.openCodeServerUrl,
                     openCodeServerPassword: defaults.openCodeServerPassword,
+                    devinBinaryPath: defaults.devinBinaryPath,
                     piAgentDir: defaults.piAgentDir,
                     piBinaryPath: defaults.piBinaryPath,
                   });
@@ -2389,6 +2418,7 @@ function SettingsRouteView() {
                     codex: false,
                     claudeAgent: false,
                     cursor: false,
+                    devin: false,
                     gemini: false,
                     grok: false,
                     kilo: false,
@@ -2413,39 +2443,43 @@ function SettingsRouteView() {
                       : providerSettings.provider === "cursor"
                         ? settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
                           settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
-                        : providerSettings.provider === "gemini"
-                          ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
-                          : providerSettings.provider === "grok"
-                            ? settings.grokBinaryPath !== defaults.grokBinaryPath
-                            : providerSettings.provider === "kilo"
-                              ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-                                settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                settings.kiloServerPassword !== defaults.kiloServerPassword
-                              : providerSettings.provider === "pi"
-                                ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                  settings.piAgentDir !== defaults.piAgentDir
-                                : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                  settings.openCodeExperimentalWebSockets !==
-                                    defaults.openCodeExperimentalWebSockets ||
-                                  settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                  settings.openCodeServerPassword !==
-                                    defaults.openCodeServerPassword;
+                        : providerSettings.provider === "devin"
+                          ? settings.devinBinaryPath !== defaults.devinBinaryPath
+                          : providerSettings.provider === "gemini"
+                            ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
+                            : providerSettings.provider === "grok"
+                              ? settings.grokBinaryPath !== defaults.grokBinaryPath
+                              : providerSettings.provider === "kilo"
+                                ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+                                  settings.kiloServerUrl !== defaults.kiloServerUrl ||
+                                  settings.kiloServerPassword !== defaults.kiloServerPassword
+                                : providerSettings.provider === "pi"
+                                  ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                    settings.piAgentDir !== defaults.piAgentDir
+                                  : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                    settings.openCodeExperimentalWebSockets !==
+                                      defaults.openCodeExperimentalWebSockets ||
+                                    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                    settings.openCodeServerPassword !==
+                                      defaults.openCodeServerPassword;
                 const binaryPathValue =
                   providerSettings.binaryPathKey === "claudeBinaryPath"
                     ? claudeBinaryPath
                     : providerSettings.binaryPathKey === "cursorBinaryPath"
                       ? cursorBinaryPath
-                      : providerSettings.binaryPathKey === "geminiBinaryPath"
-                        ? geminiBinaryPath
-                        : providerSettings.binaryPathKey === "grokBinaryPath"
-                          ? grokBinaryPath
-                          : providerSettings.binaryPathKey === "kiloBinaryPath"
-                            ? kiloBinaryPath
-                            : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                              ? openCodeBinaryPath
-                              : providerSettings.binaryPathKey === "piBinaryPath"
-                                ? piBinaryPath
-                                : codexBinaryPath;
+                      : providerSettings.binaryPathKey === "devinBinaryPath"
+                        ? devinBinaryPath
+                        : providerSettings.binaryPathKey === "geminiBinaryPath"
+                          ? geminiBinaryPath
+                          : providerSettings.binaryPathKey === "grokBinaryPath"
+                            ? grokBinaryPath
+                            : providerSettings.binaryPathKey === "kiloBinaryPath"
+                              ? kiloBinaryPath
+                              : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                                ? openCodeBinaryPath
+                                : providerSettings.binaryPathKey === "piBinaryPath"
+                                  ? piBinaryPath
+                                  : codexBinaryPath;
                 const providerStatus = providerStatusByProvider.get(providerSettings.provider);
                 const providerUpdateLabel = providerStatus
                   ? providerUpdateStatusLabel(providerStatus)
@@ -2573,18 +2607,21 @@ function SettingsRouteView() {
                                       ? { claudeBinaryPath: event.target.value }
                                       : providerSettings.binaryPathKey === "cursorBinaryPath"
                                         ? { cursorBinaryPath: event.target.value }
-                                        : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                          ? { geminiBinaryPath: event.target.value }
-                                          : providerSettings.binaryPathKey === "grokBinaryPath"
-                                            ? { grokBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                              ? { kiloBinaryPath: event.target.value }
-                                              : providerSettings.binaryPathKey ===
-                                                  "openCodeBinaryPath"
-                                                ? { openCodeBinaryPath: event.target.value }
-                                                : providerSettings.binaryPathKey === "piBinaryPath"
-                                                  ? { piBinaryPath: event.target.value }
-                                                  : { codexBinaryPath: event.target.value },
+                                        : providerSettings.binaryPathKey === "devinBinaryPath"
+                                          ? { devinBinaryPath: event.target.value }
+                                          : providerSettings.binaryPathKey === "geminiBinaryPath"
+                                            ? { geminiBinaryPath: event.target.value }
+                                            : providerSettings.binaryPathKey === "grokBinaryPath"
+                                              ? { grokBinaryPath: event.target.value }
+                                              : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                                ? { kiloBinaryPath: event.target.value }
+                                                : providerSettings.binaryPathKey ===
+                                                    "openCodeBinaryPath"
+                                                  ? { openCodeBinaryPath: event.target.value }
+                                                  : providerSettings.binaryPathKey ===
+                                                      "piBinaryPath"
+                                                    ? { piBinaryPath: event.target.value }
+                                                    : { codexBinaryPath: event.target.value },
                                   )
                                 }
                                 placeholder={providerSettings.binaryPlaceholder}
