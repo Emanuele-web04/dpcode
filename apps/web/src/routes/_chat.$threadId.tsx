@@ -644,6 +644,7 @@ function DeferredChatView(props: {
   panelState: SplitViewPanePanelState;
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
+  onOpenBrowserUrl: (url: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
   onMaximize?: () => void;
@@ -694,6 +695,7 @@ function DeferredChatView(props: {
       panelState={props.panelState}
       onToggleDiffPanel={props.onToggleDiff}
       onToggleBrowserPanel={props.onToggleBrowser}
+      onOpenBrowserUrl={props.onOpenBrowserUrl}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
       {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}
       {...(props.onMaximize ? { onMaximizeSurface: props.onMaximize } : {})}
@@ -722,6 +724,7 @@ function SplitPaneSurface(props: {
   onFocus: () => void;
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
+  onOpenBrowserUrl: (url: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onClosePanel: () => void;
   onUpdatePanelState: (
@@ -786,6 +789,7 @@ function SplitPaneSurface(props: {
               panelState={props.panelState}
               onToggleDiff={props.onToggleDiff}
               onToggleBrowser={props.onToggleBrowser}
+              onOpenBrowserUrl={props.onOpenBrowserUrl}
               onOpenTurnDiff={props.onOpenTurnDiff}
               onMaximize={props.onMaximize}
               onChangeThread={props.onChooseThread}
@@ -1244,6 +1248,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         onFocus={() => setPaneFocus(leaf.id)}
         onToggleDiff={() => togglePanePanel(leaf.id, "diff")}
         onToggleBrowser={() => togglePanePanel(leaf.id, "browser")}
+        onOpenBrowserUrl={() => updatePanePanelState(leaf.id, { panel: "browser" })}
         onOpenTurnDiff={(turnId, filePath) => openPaneTurnDiff(leaf.id, turnId, filePath)}
         onClosePanel={() => closePanePanel(leaf.id)}
         onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
@@ -1400,6 +1405,10 @@ function SingleChatSurface(props: {
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
   }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
+  const handleOpenBrowserUrl = useCallback(() => {
+    requestImmediateDockHydration("browser");
+    openPane(props.threadId, { kind: "browser" });
+  }, [openPane, props.threadId, requestImmediateDockHydration]);
   const handleOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       requestImmediateDockHydration("diff");
@@ -1681,6 +1690,7 @@ function SingleChatSurface(props: {
               panelState={DOCK_EMBEDDED_PANEL_STATE}
               onToggleDiff={noop}
               onToggleBrowser={noop}
+              onOpenBrowserUrl={noop}
               onOpenTurnDiff={noop}
               onCloseThreadPane={() => closePane(props.threadId, pane.id)}
             />
@@ -1728,6 +1738,7 @@ function SingleChatSurface(props: {
             panelState={chatPanelState}
             onToggleDiff={handleToggleDiff}
             onToggleBrowser={handleToggleBrowser}
+            onOpenBrowserUrl={handleOpenBrowserUrl}
             onOpenTurnDiff={handleOpenTurnDiff}
             onSplitSurface={handleSplitSurface}
           />

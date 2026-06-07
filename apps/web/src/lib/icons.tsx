@@ -16,6 +16,7 @@ import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowUp,
+  IconArrowUpRight,
   IconArrowsUpDown,
   IconBell,
   IconBolt,
@@ -53,7 +54,6 @@ import {
   IconMoon,
   IconPalette,
   IconPaperclip,
-  IconPinnedFilled,
   IconPlayerPlay,
   IconPlayerStop,
   IconPlus,
@@ -116,6 +116,7 @@ export const BellIcon = adaptIcon(IconBell);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
 export const ArrowDownIcon = adaptIcon(IconArrowDown);
 export const ArrowUpIcon = adaptIcon(IconArrowUp);
+export const ArrowUpRightIcon = adaptIcon(IconArrowUpRight);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
 export const BotIcon = adaptIcon(IconRobot);
 export const BugIcon = adaptIcon(IconBug);
@@ -163,7 +164,7 @@ export const GlobeIcon = adaptIcon(IconWorld);
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
-export const PlugIcon: LucideIcon = centralIconWrapper("plugin-1");
+export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 export const HammerIcon = adaptIcon(IconTool);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const ListChecksIcon = adaptIcon(IconListCheck);
@@ -185,7 +186,6 @@ export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
 export const WindowIcon: LucideIcon = centralIconWrapper("window");
 export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
 export const PinIcon: LucideIcon = centralIconWrapper("pin");
-export const PinnedFilledIcon = adaptIcon(IconPinnedFilled);
 export const PlayIcon = adaptIcon(IconPlayerPlay);
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);

@@ -11,6 +11,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadPullRequest,
+  ThreadPinnedMessages,
   ProjectScript,
   ProjectId,
   ProviderMentionReference,
@@ -74,6 +75,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    isPinned: Schema.Number,
   }),
 );
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
@@ -87,6 +89,21 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
+  Struct.assign({
+    createBranchFlowCompleted: Schema.Number,
+    isPinned: Schema.Number,
+    handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
+    lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+    pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
+    modelSelection: ModelSelectionJsonUnknown,
+  }),
+);
+const {
+  pinnedMessages: _projectionThreadPinnedMessagesField,
+  notes: _projectionThreadNotesField,
+  ...ProjectionThreadShellFields
+} = ProjectionThread.fields;
+const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFields).mapFields(
   Struct.assign({
     createBranchFlowCompleted: Schema.Number,
     isPinned: Schema.Number,
@@ -162,8 +179,12 @@ const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
 });
 
 type ProjectionThreadDbRowRaw = Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>;
+type ProjectionThreadShellDbRowRaw = Schema.Schema.Type<typeof ProjectionThreadShellDbRowSchema>;
 type ProjectionProjectDbRowRaw = Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>;
 type ProjectionThreadDbRow = Omit<ProjectionThreadDbRowRaw, "modelSelection"> & {
+  readonly modelSelection: typeof ModelSelection.Type;
+};
+type ProjectionThreadShellDbRow = Omit<ProjectionThreadShellDbRowRaw, "modelSelection"> & {
   readonly modelSelection: typeof ModelSelection.Type;
 };
 type ProjectionProjectDbRow = Omit<ProjectionProjectDbRowRaw, "defaultModelSelection"> & {
@@ -197,6 +218,14 @@ function decodeProjectionThreadRow(
   );
 }
 
+function decodeProjectionThreadShellRow(
+  row: ProjectionThreadShellDbRowRaw,
+): Effect.Effect<ProjectionThreadShellDbRow, Schema.SchemaError> {
+  return decodeModelSelection(normalizePersistedModelSelection(row.modelSelection)).pipe(
+    Effect.map((modelSelection) => ({ ...row, modelSelection })),
+  );
+}
+
 function decodeProjectionProjectRows(
   rows: ReadonlyArray<ProjectionProjectDbRowRaw>,
   operation: string,
@@ -211,6 +240,15 @@ function decodeProjectionThreadRows(
   operation: string,
 ): Effect.Effect<ReadonlyArray<ProjectionThreadDbRow>, ProjectionRepositoryError> {
   return Effect.forEach(rows, decodeProjectionThreadRow).pipe(
+    Effect.mapError(toPersistenceDecodeError(operation)),
+  );
+}
+
+function decodeProjectionThreadShellRows(
+  rows: ReadonlyArray<ProjectionThreadShellDbRowRaw>,
+  operation: string,
+): Effect.Effect<ReadonlyArray<ProjectionThreadShellDbRow>, ProjectionRepositoryError> {
+  return Effect.forEach(rows, decodeProjectionThreadShellRow).pipe(
     Effect.mapError(toPersistenceDecodeError(operation)),
   );
 }
@@ -361,13 +399,14 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
     workspaceRoot: row.workspaceRoot,
     defaultModelSelection: row.defaultModelSelection,
     scripts: row.scripts,
+    isPinned: row.isPinned > 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
 function toProjectedThreadShell(input: {
-  readonly threadRow: ProjectionThreadDbRow;
+  readonly threadRow: ProjectionThreadShellDbRow;
   readonly latestTurn: OrchestrationLatestTurn | null;
   readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
   readonly proposedPlans: ReadonlyArray<
@@ -418,7 +457,7 @@ function toProjectedThreadShell(input: {
 }
 
 function toProjectedThreadShellFromStoredSummary(input: {
-  readonly threadRow: ProjectionThreadDbRow;
+  readonly threadRow: ProjectionThreadShellDbRow;
   readonly latestTurn: OrchestrationLatestTurn | null;
   readonly session: OrchestrationSession | null;
 }): OrchestrationThreadShell {
@@ -509,6 +548,8 @@ function toProjectedThread(input: {
     proposedPlans: input.proposedPlans,
     activities: input.activities,
     checkpoints: input.checkpoints,
+    ...(threadRow.pinnedMessages !== null ? { pinnedMessages: threadRow.pinnedMessages } : {}),
+    ...(threadRow.notes !== null ? { notes: threadRow.notes } : {}),
     session: input.session,
   };
 }
@@ -559,6 +600,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
+          is_pinned AS "isPinned",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -584,6 +626,50 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           workspace_contexts_json AS "workspaceContexts",
           active_workspace_context_id AS "activeWorkspaceContextId",
+          associated_worktree_path AS "associatedWorktreePath",
+          associated_worktree_branch AS "associatedWorktreeBranch",
+          associated_worktree_ref AS "associatedWorktreeRef",
+          create_branch_flow_completed AS "createBranchFlowCompleted",
+          is_pinned AS "isPinned",
+          pinned_messages_json AS "pinnedMessages",
+          notes,
+          parent_thread_id AS "parentThreadId",
+          subagent_agent_id AS "subagentAgentId",
+          subagent_nickname AS "subagentNickname",
+          subagent_role AS "subagentRole",
+          fork_source_thread_id AS "forkSourceThreadId",
+          sidechat_source_thread_id AS "sidechatSourceThreadId",
+          last_known_pr_json AS "lastKnownPr",
+          latest_turn_id AS "latestTurnId",
+          handoff_json AS "handoff",
+          latest_user_message_at AS "latestUserMessageAt",
+          pending_approval_count AS "pendingApprovalCount",
+          pending_user_input_count AS "pendingUserInputCount",
+          has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_threads
+        ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listThreadShellRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadShellDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          title,
+          model_selection_json AS "modelSelection",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          env_mode AS "envMode",
+          branch,
+          worktree_path AS "worktreePath",
           associated_worktree_path AS "associatedWorktreePath",
           associated_worktree_branch AS "associatedWorktreeBranch",
           associated_worktree_ref AS "associatedWorktreeRef",
@@ -861,6 +947,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
+          is_pinned AS "isPinned",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -899,6 +986,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
+          is_pinned AS "isPinned",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -931,6 +1019,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_ref AS "associatedWorktreeRef",
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
+          pinned_messages_json AS "pinnedMessages",
+          notes,
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
@@ -977,6 +1067,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_ref AS "associatedWorktreeRef",
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
+          pinned_messages_json AS "pinnedMessages",
+          notes,
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
@@ -1454,6 +1546,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             workspaceRoot: row.workspaceRoot,
             defaultModelSelection: row.defaultModelSelection,
             scripts: row.scripts,
+            isPinned: row.isPinned > 0,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
             deletedAt: row.deletedAt,
@@ -1614,6 +1707,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             workspaceRoot: row.workspaceRoot,
             defaultModelSelection: row.defaultModelSelection,
             scripts: row.scripts,
+            isPinned: row.isPinned > 0,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
             deletedAt: row.deletedAt,
@@ -1674,7 +1768,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
               ),
-              listThreadRows(undefined).pipe(
+              listThreadShellRows(undefined).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listThreads:query",
@@ -1682,7 +1776,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
                 Effect.flatMap((rows) =>
-                  decodeProjectionThreadRows(
+                  decodeProjectionThreadShellRows(
                     rows,
                     "ProjectionSnapshotQuery.getShellSnapshot:listThreads:decodeModelSelections",
                   ),
@@ -1837,6 +1931,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               workspaceRoot: row.workspaceRoot,
               defaultModelSelection: row.defaultModelSelection,
               scripts: row.scripts,
+              isPinned: row.isPinned > 0,
               createdAt: row.createdAt,
               updatedAt: row.updatedAt,
               deletedAt: row.deletedAt,

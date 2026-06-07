@@ -274,9 +274,13 @@ export type OrchestrationMessageSource = typeof OrchestrationMessageSource.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_PINNED_PROJECTS = 3;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 export const CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS = 4_000;
+export const THREAD_NOTES_MAX_CHARS = 16_384;
+export const PINNED_MESSAGES_MAX_COUNT = 100;
+export const PINNED_MESSAGE_LABEL_MAX_CHARS = 60;
 // Correlation id is command id by design in this model.
 export const CorrelationId = CommandId;
 export type CorrelationId = typeof CorrelationId.Type;
@@ -357,6 +361,7 @@ export const OrchestrationProject = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -370,6 +375,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -514,6 +520,32 @@ export const OrchestrationThreadPullRequest = Schema.Struct({
 });
 export type OrchestrationThreadPullRequest = typeof OrchestrationThreadPullRequest.Type;
 
+/**
+ * A message the user pinned to the chat's sidebar checklist. `label` is an
+ * optional user override; when null the UI derives a label from the message
+ * text. `done` tracks the checklist "addressed" state. Decoding defaults keep
+ * older/partial persisted entries decodable as the shape evolves.
+ */
+export const ThreadNotes = Schema.String.check(Schema.isMaxLength(THREAD_NOTES_MAX_CHARS));
+export type ThreadNotes = typeof ThreadNotes.Type;
+export const PinnedMessageLabel = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(PINNED_MESSAGE_LABEL_MAX_CHARS),
+);
+export type PinnedMessageLabel = typeof PinnedMessageLabel.Type;
+export const PinnedMessage = Schema.Struct({
+  messageId: MessageId,
+  label: Schema.optional(Schema.NullOr(PinnedMessageLabel)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  done: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  pinnedAt: IsoDateTime,
+});
+export type PinnedMessage = typeof PinnedMessage.Type;
+export const ThreadPinnedMessages = Schema.Array(PinnedMessage).check(
+  Schema.isMaxLength(PINNED_MESSAGES_MAX_COUNT),
+);
+export type ThreadPinnedMessages = typeof ThreadPinnedMessages.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -576,6 +608,8 @@ export const OrchestrationThread = Schema.Struct({
   ),
   deletedAt: Schema.NullOr(IsoDateTime),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),
+  pinnedMessages: Schema.optional(ThreadPinnedMessages),
+  notes: Schema.optional(ThreadNotes),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(Schema.withDecodingDefault(() => [])),
   activities: Schema.Array(OrchestrationThreadActivity),
@@ -709,6 +743,7 @@ export const ProjectCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
 });
 
@@ -721,6 +756,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  isPinned: Schema.optional(Schema.Boolean),
 });
 
 const ProjectDeleteCommand = Schema.Struct({
@@ -887,6 +923,38 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   subagentRole: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  pinnedMessages: Schema.optional(ThreadPinnedMessages),
+  notes: Schema.optional(ThreadNotes),
+});
+
+const ThreadPinnedMessageAddCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.add"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+});
+
+const ThreadPinnedMessageRemoveCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.remove"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+});
+
+const ThreadPinnedMessageDoneSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.done.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  done: Schema.Boolean,
+});
+
+const ThreadPinnedMessageLabelSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.label.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  label: Schema.NullOr(PinnedMessageLabel),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -1060,6 +1128,10 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
   ThreadMetaUpdateCommand,
+  ThreadPinnedMessageAddCommand,
+  ThreadPinnedMessageRemoveCommand,
+  ThreadPinnedMessageDoneSetCommand,
+  ThreadPinnedMessageLabelSetCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
@@ -1085,6 +1157,10 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
   ThreadMetaUpdateCommand,
+  ThreadPinnedMessageAddCommand,
+  ThreadPinnedMessageRemoveCommand,
+  ThreadPinnedMessageDoneSetCommand,
+  ThreadPinnedMessageLabelSetCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
@@ -1205,6 +1281,10 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.archived",
   "thread.unarchived",
   "thread.meta-updated",
+  "thread.pinned-message-added",
+  "thread.pinned-message-removed",
+  "thread.pinned-message-done-set",
+  "thread.pinned-message-label-set",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -1237,6 +1317,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1248,6 +1329,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  isPinned: Schema.optional(Schema.Boolean),
   updatedAt: IsoDateTime,
 });
 
@@ -1351,6 +1433,34 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   subagentRole: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  pinnedMessages: Schema.optional(ThreadPinnedMessages),
+  notes: Schema.optional(ThreadNotes),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageAddedPayload = Schema.Struct({
+  threadId: ThreadId,
+  pin: PinnedMessage,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageRemovedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageDoneSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  done: Schema.Boolean,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageLabelSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  label: Schema.NullOr(PinnedMessageLabel),
   updatedAt: IsoDateTime,
 });
 
@@ -1554,6 +1664,26 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.meta-updated"),
     payload: ThreadMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-added"),
+    payload: ThreadPinnedMessageAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-removed"),
+    payload: ThreadPinnedMessageRemovedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-done-set"),
+    payload: ThreadPinnedMessageDoneSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-label-set"),
+    payload: ThreadPinnedMessageLabelSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

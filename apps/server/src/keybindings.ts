@@ -84,6 +84,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus" },
   { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
@@ -93,6 +95,12 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus" },
   { key: "mod+alt+g", command: "chat.newGemini", when: "!terminalFocus" },
   { key: "mod+\\", command: "chat.split", when: "!terminalFocus" },
+  // Recent-view switcher (Ctrl+Tab) is an installed-app feature only: Electron and
+  // standalone PWA windows have no tab strip, so the chord reaches the page. In a normal
+  // browser tab, Ctrl+Tab / Ctrl+Shift+Tab are reserved for browser tab switching and are
+  // not deliverable/preventable by page JS, so the switcher silently won't open there.
+  { key: "ctrl+tab", command: "view.recent.next", when: "!terminalFocus" },
+  { key: "ctrl+shift+tab", command: "view.recent.previous", when: "!terminalFocus" },
   { key: "mod+1", command: "thread.jump.1", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+2", command: "thread.jump.2", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+3", command: "thread.jump.3", when: "!terminalFocus && !terminalWorkspaceOpen" },
@@ -483,10 +491,16 @@ function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
 
 const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "commandPalette.toggle": "sidebar.search",
+  "composer.effortPicker.toggle": "traitsPicker.toggle",
+  "composer.modelPicker.toggle": "modelPicker.toggle",
+  "effortPicker.toggle": "traitsPicker.toggle",
+  "reasoningPicker.toggle": "traitsPicker.toggle",
   "thread.previous": "chat.visible.previous",
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
+// Cross-device configs can lag behind command renames; normalize known aliases
+// before schema validation so stale synced files do not become warning toasts.
 function normalizeLegacyKeybindingEntry(entry: unknown): {
   readonly entry: unknown;
   readonly migrated: boolean;

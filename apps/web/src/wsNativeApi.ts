@@ -494,6 +494,7 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     git: {
+      githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
@@ -812,6 +813,25 @@ export function createWsNativeApi(): NativeApi {
 
   instance = { api, transport };
   return api;
+}
+
+// Browser-mode tests mount full app roots repeatedly in one page; reset the
+// singleton so each test gets a fresh WebSocket stream and cached push state.
+export function resetWsNativeApiForTest(): void {
+  instance?.transport.dispose();
+  instance = null;
+  welcomeListeners.clear();
+  serverConfigUpdatedListeners.clear();
+  serverProviderStatusesUpdatedListeners.clear();
+  serverMaintenanceUpdatedListeners.clear();
+  serverSettingsUpdatedListeners.clear();
+  gitActionProgressListeners.clear();
+  terminalEventListeners.clear();
+  orchestrationDomainEventListeners.clear();
+  orchestrationShellEventListeners.clear();
+  orchestrationThreadEventListeners.clear();
+  fallbackBrowserStateListeners.clear();
+  fallbackBrowserStates.clear();
 }
 
 if (import.meta.hot) {

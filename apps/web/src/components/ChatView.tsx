@@ -17,6 +17,7 @@ import {
   type ProviderSkillReference,
   type ProviderStartOptions,
   type ProviderUserInputAnswers,
+  type PinnedMessage,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -65,6 +66,7 @@ import { type LegendListRef } from "@legendapp/list/react";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitCreateWorktreeMutationOptions,
+  gitGithubRepositoryQueryOptions,
   gitBranchesQueryOptions,
 } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
@@ -84,7 +86,8 @@ import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import {
   formatComposerMentionToken,
-  createComposerMentionTokenRegex,
+  filterPromptProviderMentionReferences,
+  filterPromptSkillReferences,
 } from "~/lib/composerMentions";
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import {
@@ -117,6 +120,7 @@ import {
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
+  resolveProjectScriptTerminalTarget,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
@@ -307,6 +311,7 @@ import {
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
+import { usePinnedMessageActions } from "./chat/environment/usePinnedMessageActions";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
@@ -319,7 +324,9 @@ import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import { useIsMobile } from "~/hooks/useMediaQuery";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
+import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
@@ -429,6 +436,8 @@ const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
+const EMPTY_PINNED_MESSAGES: readonly PinnedMessage[] = [];
+const EMPTY_PINNED_TEXT: ReadonlyMap<MessageId, string> = new Map();
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
@@ -608,10 +617,6 @@ function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   console.warn(`[voice] ${event}`);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {
   if (provider === "claudeAgent") {
     const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
@@ -701,102 +706,6 @@ function skillMentionPrefix(provider: string): string {
   return "/";
 }
 
-function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
-  const escapedSkillName = escapeRegExp(skillName);
-  const prefixes = provider === "pi" ? ["/skill:"] : ["/", "$"];
-  return prefixes.some((prefix) => {
-    const pattern = new RegExp(`(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`, "i");
-    return pattern.test(prompt);
-  });
-}
-
-const PROMPT_MENTION_NAME_REGEX = createComposerMentionTokenRegex({
-  includeTrailingTokenAtEnd: true,
-});
-
-function collectPromptMentionNames(prompt: string): string[] {
-  const names: string[] = [];
-  for (const match of prompt.matchAll(PROMPT_MENTION_NAME_REGEX)) {
-    const mentionName = (match[2] ?? match[3] ?? "").trim();
-    if (mentionName.length > 0) {
-      names.push(mentionName);
-    }
-  }
-  return names;
-}
-
-function normalizeMentionNameKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function resolvePromptPluginMentions(params: {
-  prompt: string;
-  existingMentions: ReadonlyArray<ProviderMentionReference>;
-  providerPlugins: ReadonlyArray<ComposerPluginSuggestion>;
-}): ProviderMentionReference[] {
-  const promptMentionNames = collectPromptMentionNames(params.prompt);
-  if (promptMentionNames.length === 0) {
-    return [];
-  }
-
-  const uniquePromptMentionNames: string[] = [];
-  const seenPromptMentionNames = new Set<string>();
-  for (const mentionName of promptMentionNames) {
-    const key = normalizeMentionNameKey(mentionName);
-    if (seenPromptMentionNames.has(key)) {
-      continue;
-    }
-    seenPromptMentionNames.add(key);
-    uniquePromptMentionNames.push(mentionName);
-  }
-
-  const existingMentionsByName = new Map<string, ProviderMentionReference[]>();
-  for (const mention of params.existingMentions) {
-    const key = normalizeMentionNameKey(mention.name);
-    const bucket = existingMentionsByName.get(key);
-    if (bucket) {
-      bucket.push(mention);
-    } else {
-      existingMentionsByName.set(key, [mention]);
-    }
-  }
-
-  const providerMentionsByName = new Map<string, ProviderMentionReference[]>();
-  for (const suggestion of params.providerPlugins) {
-    const key = normalizeMentionNameKey(suggestion.plugin.name);
-    const bucket = providerMentionsByName.get(key);
-    if (bucket) {
-      bucket.push(suggestion.mention);
-    } else {
-      providerMentionsByName.set(key, [suggestion.mention]);
-    }
-  }
-
-  const resolvedMentions: ProviderMentionReference[] = [];
-  const seenPaths = new Set<string>();
-
-  for (const mentionName of uniquePromptMentionNames) {
-    const key = normalizeMentionNameKey(mentionName);
-    const existingMention = (existingMentionsByName.get(key) ?? []).find(
-      (candidate) => !seenPaths.has(candidate.path),
-    );
-    if (existingMention) {
-      seenPaths.add(existingMention.path);
-      resolvedMentions.push(existingMention);
-      continue;
-    }
-
-    const discoveredMentions = providerMentionsByName.get(key) ?? [];
-    if (discoveredMentions.length === 1) {
-      const discoveredMention = discoveredMentions[0]!;
-      seenPaths.add(discoveredMention.path);
-      resolvedMentions.push(discoveredMention);
-    }
-  }
-
-  return resolvedMentions;
-}
-
 const providerMentionReferencesEqual = (
   left: ReadonlyArray<ProviderMentionReference>,
   right: ReadonlyArray<ProviderMentionReference>,
@@ -860,6 +769,7 @@ interface ChatViewProps {
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
   onToggleBrowserPanel?: () => void;
+  onOpenBrowserUrl?: (url: string) => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
   onMaximizeSurface?: () => void;
@@ -906,6 +816,7 @@ export default function ChatView({
   panelState,
   onToggleDiffPanel,
   onToggleBrowserPanel,
+  onOpenBrowserUrl,
   onOpenTurnDiffPanel,
   onSplitSurface,
   onMaximizeSurface,
@@ -938,6 +849,8 @@ export default function ChatView({
   const composerImages = composerDraft.images;
   const composerAssistantSelections = composerDraft.assistantSelections;
   const composerTerminalContexts = composerDraft.terminalContexts;
+  const composerSkills = composerDraft.skills;
+  const composerMentions = composerDraft.mentions;
   const queuedComposerTurns = composerDraft.queuedTurns;
   const {
     isRecording: isVoiceRecording,
@@ -994,6 +907,8 @@ export default function ChatView({
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
   );
+  const setComposerDraftSkills = useComposerDraftStore((store) => store.setSkills);
+  const setComposerDraftMentions = useComposerDraftStore((store) => store.setMentions);
   const clearComposerDraftPersistedAttachments = useComposerDraftStore(
     (store) => store.clearPersistedAttachments,
   );
@@ -1076,11 +991,43 @@ export default function ChatView({
     detectComposerTrigger(prompt, prompt.length),
   );
   const [selectedComposerSkills, setSelectedComposerSkills] = useState<ProviderSkillReference[]>(
-    [],
+    () => composerSkills,
   );
   const [selectedComposerMentions, setSelectedComposerMentions] = useState<
     ProviderMentionReference[]
-  >([]);
+  >(() => composerMentions);
+  const selectedComposerSkillsRef = useRef<ProviderSkillReference[]>(selectedComposerSkills);
+  const selectedComposerMentionsRef = useRef<ProviderMentionReference[]>(selectedComposerMentions);
+  selectedComposerSkillsRef.current = selectedComposerSkills;
+  selectedComposerMentionsRef.current = selectedComposerMentions;
+  const updateSelectedComposerSkills = useCallback(
+    (
+      next:
+        | ProviderSkillReference[]
+        | ((existing: ProviderSkillReference[]) => ProviderSkillReference[]),
+    ) => {
+      const existing = selectedComposerSkillsRef.current;
+      const resolved = typeof next === "function" ? next(existing) : next;
+      selectedComposerSkillsRef.current = resolved;
+      setSelectedComposerSkills(resolved);
+      setComposerDraftSkills(threadId, resolved);
+    },
+    [setComposerDraftSkills, threadId],
+  );
+  const updateSelectedComposerMentions = useCallback(
+    (
+      next:
+        | ProviderMentionReference[]
+        | ((existing: ProviderMentionReference[]) => ProviderMentionReference[]),
+    ) => {
+      const existing = selectedComposerMentionsRef.current;
+      const resolved = typeof next === "function" ? next(existing) : next;
+      selectedComposerMentionsRef.current = resolved;
+      setSelectedComposerMentions(resolved);
+      setComposerDraftMentions(threadId, resolved);
+    },
+    [setComposerDraftMentions, threadId],
+  );
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
@@ -1097,6 +1044,7 @@ export default function ChatView({
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const legendListRef = useRef<LegendListRef | null>(null);
+  const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const isAtEndRef = useRef(true);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
@@ -1613,6 +1561,10 @@ export default function ChatView({
     : null;
   const selectedProvider: ProviderKind =
     lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+  const previousSelectedProviderRef = useRef<{
+    threadId: ThreadId;
+    provider: ProviderKind;
+  } | null>(null);
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
@@ -2478,6 +2430,37 @@ export default function ChatView({
       ),
     [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
   );
+  // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
+  const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
+  const threadNotes = activeThread?.notes ?? "";
+  const pinnedMessageIds = useMemo(
+    () => new Set(pinnedMessages.map((pin) => pin.messageId)),
+    [pinnedMessages],
+  );
+  // Resolve the live text of currently-pinned messages so the panel can derive auto-labels
+  // and flag pins whose source message is no longer in the transcript.
+  const pinnedMessageTextById = useMemo(() => {
+    if (pinnedMessageIds.size === 0) {
+      return EMPTY_PINNED_TEXT;
+    }
+    const map = new Map<MessageId, string>();
+    for (const message of timelineMessages) {
+      if (pinnedMessageIds.has(message.id)) {
+        map.set(message.id, message.text);
+      }
+    }
+    return map;
+  }, [pinnedMessageIds, timelineMessages]);
+  const {
+    handleTogglePinMessage,
+    handleTogglePinnedMessageDone,
+    handleUnpinMessage,
+    handleRenamePinnedMessage,
+    handleNotesChange,
+  } = usePinnedMessageActions({ activeThreadId, pinnedMessages });
+  const handleJumpToPinnedMessage = useCallback((messageId: MessageId) => {
+    timelineControllerRef.current?.scrollToMessage(messageId);
+  }, []);
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
@@ -3055,11 +3038,11 @@ export default function ChatView({
     () => shortcutLabelForCommand(keybindings, "chat.split"),
     [keybindings],
   );
-  // Composer picker shortcuts are hard-coded in the keydown handler below
-  // (Mod+Shift+M opens the model picker, Mod+Shift+E opens the reasoning picker).
-  // Build their display labels directly so the tooltips match the handler exactly.
+  // The combined picker uses the same configurable keybinding command that the
+  // keydown handler resolves, keeping synced keybindings and tooltip labels aligned.
   const modelPickerShortcutLabel = useMemo(
     () =>
+      shortcutLabelForCommand(keybindings, "modelPicker.toggle") ??
       formatShortcutLabel({
         key: "m",
         metaKey: false,
@@ -3068,7 +3051,7 @@ export default function ChatView({
         altKey: false,
         modKey: true,
       }),
-    [],
+    [keybindings],
   );
   const onToggleDiff = useCallback(() => {
     if (diffEnvironmentPending && !diffOpen) {
@@ -3105,6 +3088,33 @@ export default function ChatView({
       },
     });
   }, [browserOpen, navigate, onToggleBrowserPanel, threadId]);
+  const openBrowserUrl = useCallback(
+    (url: string) => {
+      const api = readNativeApi();
+      void api?.browser.open({ threadId, initialUrl: url }).catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not open repository",
+          description:
+            error instanceof Error ? error.message : "The in-app browser could not open GitHub.",
+        });
+      });
+      if (onOpenBrowserUrl) {
+        onOpenBrowserUrl(url);
+        return;
+      }
+      void navigate({
+        to: "/$threadId",
+        params: { threadId },
+        replace: true,
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          panel: "browser",
+        }),
+      });
+    },
+    [navigate, onOpenBrowserUrl, threadId],
+  );
 
   const envLocked = Boolean(
     activeThread &&
@@ -3643,6 +3653,7 @@ export default function ChatView({
   // The terminal's panel toggle mirrors the right dock's collapse control: it shows
   // or hides the side panel only when this thread already has a pane to show.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
+  const isMobileViewport = useIsMobile();
   // The Environment panel replaces the old header diff toggle + footer pickers for normal
   // threads; disposable (temporary/draft) threads keep the legacy inline controls.
   const isDisposableThread = useIsDisposableThread(threadId);
@@ -3664,6 +3675,9 @@ export default function ChatView({
     environmentPanelOpen,
     isCenteredEmptyLanding,
   });
+  const githubRepositoryQuery = useQuery(
+    gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
+  );
   const threadRecap = useThreadRecap({
     thread: activeThread,
     cwd: threadWorkspaceCwd,
@@ -3801,10 +3815,14 @@ export default function ChatView({
         terminalState.activeTerminalId ||
         terminalState.terminalIds[0] ||
         DEFAULT_THREAD_TERMINAL_ID;
-      const isBaseTerminalBusy = terminalState.runningTerminalIds.includes(baseTerminalId);
-      const wantsNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
-      const shouldCreateNewTerminal = wantsNewTerminal;
-      const targetTerminalId = shouldCreateNewTerminal ? randomTerminalId() : baseTerminalId;
+      const { shouldCreateNewTerminal, terminalId: targetTerminalId } =
+        resolveProjectScriptTerminalTarget({
+          baseTerminalId,
+          createTerminalId: randomTerminalId,
+          hasRunningTerminal: terminalState.runningTerminalIds.length > 0,
+          preferNewTerminal: options?.preferNewTerminal,
+          terminalOpen: terminalState.terminalOpen,
+        });
 
       setTerminalOpen(true);
       if (shouldCreateNewTerminal) {
@@ -3821,21 +3839,14 @@ export default function ChatView({
         worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
         ...(options?.env ? { extraEnv: options.env } : {}),
       });
-      const openTerminalInput: Parameters<typeof api.terminal.open>[0] = shouldCreateNewTerminal
-        ? {
-            threadId: activeThreadId,
-            terminalId: targetTerminalId,
-            cwd: targetCwd,
-            env: runtimeEnv,
-            cols: SCRIPT_TERMINAL_COLS,
-            rows: SCRIPT_TERMINAL_ROWS,
-          }
-        : {
-            threadId: activeThreadId,
-            terminalId: targetTerminalId,
-            cwd: targetCwd,
-            env: runtimeEnv,
-          };
+      const openTerminalInput: Parameters<typeof api.terminal.open>[0] = {
+        threadId: activeThreadId,
+        terminalId: targetTerminalId,
+        cwd: targetCwd,
+        env: runtimeEnv,
+        cols: SCRIPT_TERMINAL_COLS,
+        rows: SCRIPT_TERMINAL_ROWS,
+      };
 
       try {
         const terminalCommandIdentity = deriveTerminalCommandIdentity(script.command);
@@ -3870,6 +3881,7 @@ export default function ChatView({
       storeSetTerminalMetadata,
       setLastInvokedScriptByProjectId,
       terminalState.activeTerminalId,
+      terminalState.terminalOpen,
       terminalState.runningTerminalIds,
       terminalState.terminalIds,
     ],
@@ -4509,28 +4521,43 @@ export default function ChatView({
     setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
   }, [prompt]);
 
-  useEffect(() => {
-    setSelectedComposerSkills((existing) =>
-      existing.filter((skill) => promptIncludesSkillMention(prompt, skill.name, selectedProvider)),
-    );
-  }, [prompt, selectedProvider]);
+  useLayoutEffect(() => {
+    updateSelectedComposerSkills(composerSkills);
+    updateSelectedComposerMentions(composerMentions);
+  }, [
+    composerMentions,
+    composerSkills,
+    threadId,
+    updateSelectedComposerMentions,
+    updateSelectedComposerSkills,
+  ]);
 
   useEffect(() => {
-    setSelectedComposerMentions((existing) => {
-      const nextMentions = resolvePromptPluginMentions({
-        prompt,
-        existingMentions: existing,
-        providerPlugins,
-      });
+    updateSelectedComposerSkills((existing) =>
+      filterPromptSkillReferences(prompt, existing, selectedProvider),
+    );
+  }, [prompt, selectedProvider, updateSelectedComposerSkills]);
+
+  useEffect(() => {
+    updateSelectedComposerMentions((existing) => {
+      const nextMentions = filterPromptProviderMentionReferences(prompt, existing);
       return providerMentionReferencesEqual(existing, nextMentions) ? existing : nextMentions;
     });
-  }, [prompt, providerPlugins]);
+  }, [prompt, updateSelectedComposerMentions]);
 
-  // Clear selected skills when switching providers — skills are provider-specific.
+  // Provider references are provider-specific; keep draft restores from looking like manual switches.
   useEffect(() => {
-    setSelectedComposerSkills([]);
-    setSelectedComposerMentions([]);
-  }, [selectedProvider]);
+    const previous = previousSelectedProviderRef.current;
+    previousSelectedProviderRef.current = {
+      threadId,
+      provider: selectedProvider,
+    };
+    if (!previous || previous.threadId !== threadId || previous.provider === selectedProvider) {
+      return;
+    }
+    updateSelectedComposerSkills([]);
+    updateSelectedComposerMentions([]);
+  }, [selectedProvider, threadId, updateSelectedComposerMentions, updateSelectedComposerSkills]);
 
   useLayoutEffect(() => {
     // ChatView stays mounted across thread switches, so clear thread-local overlays before paint.
@@ -4560,8 +4587,6 @@ export default function ChatView({
     setComposerHighlightedItemId(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
-    setSelectedComposerSkills([]);
-    setSelectedComposerMentions([]);
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     setExpandedImage(null);
@@ -4850,36 +4875,12 @@ export default function ChatView({
         void onInterrupt();
         return;
       }
-      const useMetaForMod = isMacPlatform(navigator.platform);
       const composerPickerShortcutActive =
         !isTerminalFocused() &&
         !isVoiceRecording &&
         !isVoiceTranscribing &&
         !isComposerApprovalState &&
         canHandleComposerPickerShortcut(event, composerFormRef.current);
-      if (
-        composerPickerShortcutActive &&
-        event.shiftKey &&
-        !event.altKey &&
-        event.metaKey === useMetaForMod &&
-        event.ctrlKey === !useMetaForMod
-      ) {
-        const normalizedKey = event.key.toLowerCase();
-        if (normalizedKey === "m") {
-          event.preventDefault();
-          event.stopPropagation();
-          handleModelPickerOpenChange(true);
-          scheduleComposerFocus();
-          return;
-        }
-        if (normalizedKey === "e") {
-          event.preventDefault();
-          event.stopPropagation();
-          handleTraitsPickerOpenChange(true);
-          scheduleComposerFocus();
-          return;
-        }
-      }
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
@@ -4893,6 +4894,24 @@ export default function ChatView({
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "modelPicker.toggle") {
+        if (!composerPickerShortcutActive) return;
+        event.preventDefault();
+        event.stopPropagation();
+        handleModelPickerOpenChange(true);
+        scheduleComposerFocus();
+        return;
+      }
+
+      if (command === "traitsPicker.toggle") {
+        if (!composerPickerShortcutActive) return;
+        event.preventDefault();
+        event.stopPropagation();
+        handleTraitsPickerOpenChange(true);
+        scheduleComposerFocus();
+        return;
+      }
 
       if (command === "terminal.toggle") {
         event.preventDefault();
@@ -5435,13 +5454,13 @@ export default function ChatView({
     (threadId: ThreadId) => {
       promptRef.current = "";
       clearComposerDraftContent(threadId);
-      setSelectedComposerSkills([]);
-      setSelectedComposerMentions([]);
+      updateSelectedComposerSkills([]);
+      updateSelectedComposerMentions([]);
       setComposerHighlightedItemId(null);
       setComposerCursor(0);
       setComposerTrigger(null);
     },
-    [clearComposerDraftContent],
+    [clearComposerDraftContent, updateSelectedComposerMentions, updateSelectedComposerSkills],
   );
 
   const restoreQueuedTurnToComposer = useCallback(
@@ -5473,11 +5492,11 @@ export default function ChatView({
         if (queuedTurn.terminalContexts.length > 0) {
           addComposerTerminalContextsToDraft(queuedTurn.terminalContexts);
         }
-        setSelectedComposerSkills(queuedTurn.skills);
-        setSelectedComposerMentions(queuedTurn.mentions);
+        updateSelectedComposerSkills(queuedTurn.skills);
+        updateSelectedComposerMentions(queuedTurn.mentions);
       } else {
-        setSelectedComposerSkills([]);
-        setSelectedComposerMentions([]);
+        updateSelectedComposerSkills([]);
+        updateSelectedComposerMentions([]);
       }
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
@@ -5498,6 +5517,8 @@ export default function ChatView({
       setComposerDraftModelSelection,
       setComposerDraftPrompt,
       setComposerDraftRuntimeMode,
+      updateSelectedComposerMentions,
+      updateSelectedComposerSkills,
     ],
   );
 
@@ -5570,8 +5591,10 @@ export default function ChatView({
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
-    const selectedComposerSkillsForSend = queuedChatTurn?.skills ?? selectedComposerSkills;
-    const selectedComposerMentionsForSend = queuedChatTurn?.mentions ?? selectedComposerMentions;
+    const selectedComposerSkillsForSend =
+      queuedChatTurn?.skills ?? selectedComposerSkillsRef.current;
+    const selectedComposerMentionsForSend =
+      queuedChatTurn?.mentions ?? selectedComposerMentionsRef.current;
     const selectedProviderForSend = queuedChatTurn?.selectedProvider ?? selectedProvider;
     const selectedModelForSend = queuedChatTurn?.selectedModel ?? selectedModel;
     const selectedPromptEffortForSend =
@@ -5873,14 +5896,15 @@ export default function ChatView({
       effort: selectedPromptEffortForSend,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
-    const mentionedSkillsForSend = selectedComposerSkillsForSend.filter((skill) =>
-      promptIncludesSkillMention(outgoingMessageText, skill.name, selectedProviderForSend),
+    const mentionedSkillsForSend = filterPromptSkillReferences(
+      outgoingMessageText,
+      selectedComposerSkillsForSend,
+      selectedProviderForSend,
     );
-    const mentionedPluginMentionsForSend = resolvePromptPluginMentions({
-      prompt: outgoingMessageText,
-      existingMentions: selectedComposerMentionsForSend,
-      providerPlugins,
-    });
+    const mentionedPluginMentionsForSend = filterPromptProviderMentionReferences(
+      outgoingMessageText,
+      selectedComposerMentionsForSend,
+    );
     const turnAttachmentsPromise = Promise.all([
       ...composerAssistantSelectionsSnapshot.map((selection) =>
         Promise.resolve({
@@ -5916,6 +5940,10 @@ export default function ChatView({
         text: outgoingMessageText,
         dispatchMode,
         ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+        ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
+        ...(mentionedPluginMentionsForSend.length > 0
+          ? { mentions: mentionedPluginMentionsForSend }
+          : {}),
         createdAt: messageCreatedAt,
         streaming: false,
         source: "native",
@@ -6146,8 +6174,8 @@ export default function ChatView({
           addComposerAssistantSelectionToDraft(selection);
         }
         addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
-        setSelectedComposerSkills(composerSkillsSnapshot);
-        setSelectedComposerMentions(composerMentionsSnapshot);
+        updateSelectedComposerSkills(composerSkillsSnapshot);
+        updateSelectedComposerMentions(composerMentionsSnapshot);
         setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
       }
       setThreadError(
@@ -7407,7 +7435,7 @@ export default function ChatView({
           trigger,
           base: `${skillMentionPrefix(selectedProvider)}${item.skill.name} `,
           onApplied: () => {
-            setSelectedComposerSkills((existing) => {
+            updateSelectedComposerSkills((existing) => {
               const nextSkill = {
                 name: item.skill.name,
                 path: item.skill.path,
@@ -7426,9 +7454,9 @@ export default function ChatView({
         applyComposerTriggerReplacement({
           snapshot,
           trigger,
-          base: `@${item.label} `,
+          base: `${formatComposerMentionToken(item.mention.name)} `,
           onApplied: () => {
-            setSelectedComposerMentions((existing) => {
+            updateSelectedComposerMentions((existing) => {
               const nextMention = item.mention;
               const nextWithoutSameName = existing.filter(
                 (mention) => mention.name !== nextMention.name,
@@ -7465,8 +7493,8 @@ export default function ChatView({
       setComposerCommandPicker,
       localFolderBrowseRootPath,
       selectedProvider,
-      setSelectedComposerMentions,
-      setSelectedComposerSkills,
+      updateSelectedComposerMentions,
+      updateSelectedComposerSkills,
       resolveActiveComposerTrigger,
     ],
   );
@@ -7872,6 +7900,7 @@ export default function ChatView({
   const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
     gitCwd: threadWorkspaceCwd,
     openInCwd: threadWorkspaceCwd,
+    githubRepository: githubRepositoryQuery.data?.repository ?? null,
     isGitRepo,
     keybindings,
     availableEditors,
@@ -7882,14 +7911,23 @@ export default function ChatView({
     diffTotals: repoDiffTotals,
     branchToolbar: branchToolbarProps,
     recap: threadRecap,
+    pinnedMessages,
+    pinnedMessageTextById,
+    notes: threadNotes,
     onToggleDiff,
+    onOpenGithubRepository: openBrowserUrl,
+    onJumpToPinnedMessage: handleJumpToPinnedMessage,
+    onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
+    onUnpinMessage: handleUnpinMessage,
+    onRenamePinnedMessage: handleRenamePinnedMessage,
+    onNotesChange: handleNotesChange,
     onClose: () => setEnvironmentPanelOpen(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const environmentUsesFloatingOverlay =
-    isTerminalEnvironmentContext || rightDockOpen || surfaceMode === "split";
+    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
@@ -7901,12 +7939,6 @@ export default function ChatView({
 
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
-  const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
-  // The queued follow-up recap floats as its own detached, rounded panel above the
-  // composer, so only a flush task-list card (when no recap sits between them) makes
-  // the composer drop its top radius to fuse upward. Otherwise the composer stays a
-  // fully rounded surface and does not change shape when rows appear above it.
-  const composerTopFused = taskListAboveComposer && queuedComposerTurns.length === 0;
   const renderActiveTaskListCard = () =>
     activeTaskList && !planSidebarOpen ? (
       <ComposerActiveTaskListCard
@@ -7940,7 +7972,6 @@ export default function ChatView({
             <div
               className={cn(
                 COMPOSER_INPUT_SHELL_CLASS_NAME,
-                composerTopFused && "!rounded-t-none",
                 composerProviderState.composerFrameClassName,
                 composerMenuOpen && !isComposerApprovalState && "overflow-visible",
               )}
@@ -7952,14 +7983,13 @@ export default function ChatView({
               <div
                 className={cn(
                   COMPOSER_INPUT_SURFACE_CLASS_NAME,
-                  composerTopFused && "!rounded-t-none",
                   isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                   composerProviderState.composerSurfaceClassName,
                   composerMenuOpen && !isComposerApprovalState && "overflow-visible",
                 )}
               >
                 <ComposerInputBanners
-                  roundedTopReset={composerTopFused}
+                  roundedTopReset={false}
                   activeApproval={activePendingApproval}
                   pendingApprovalCount={pendingApprovals.length}
                   pendingUserInputs={pendingUserInputs}
@@ -8580,6 +8610,9 @@ export default function ChatView({
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
+                    timelineControllerRef={timelineControllerRef}
+                    pinnedMessageIds={pinnedMessageIds}
+                    onTogglePinMessage={handleTogglePinMessage}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
