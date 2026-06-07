@@ -501,17 +501,27 @@ const LEGACY_KEYBINDING_COMMAND_ALIASES = {
 
 // Cross-device configs can lag behind command renames; normalize known aliases
 // before schema validation so stale synced files do not become warning toasts.
+const OBSOLETE_KEYBINDING_COMMAND_PREFIXES = ["modelPicker."] as const;
+
+function isObsoleteKeybindingCommand(command: string): boolean {
+  return OBSOLETE_KEYBINDING_COMMAND_PREFIXES.some((prefix) => command.startsWith(prefix));
+}
+
 function normalizeLegacyKeybindingEntry(entry: unknown): {
   readonly entry: unknown;
   readonly migrated: boolean;
+  readonly dropped: boolean;
 } {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-    return { entry, migrated: false };
+    return { entry, migrated: false, dropped: false };
   }
 
   const command = (entry as { command?: unknown }).command;
+  if (typeof command === "string" && isObsoleteKeybindingCommand(command)) {
+    return { entry, migrated: false, dropped: true };
+  }
   if (typeof command !== "string" || !(command in LEGACY_KEYBINDING_COMMAND_ALIASES)) {
-    return { entry, migrated: false };
+    return { entry, migrated: false, dropped: false };
   }
 
   return {
@@ -523,6 +533,7 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
         ],
     },
     migrated: true,
+    dropped: false,
   };
 }
 
@@ -663,6 +674,9 @@ const makeKeybindings = Effect.gen(function* () {
     return yield* Effect.forEach(rawConfig, (entry) =>
       Effect.gen(function* () {
         const normalized = normalizeLegacyKeybindingEntry(entry);
+        if (normalized.dropped) {
+          return null;
+        }
         const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
         if (decodedRule._tag === "Failure") {
           yield* Effect.logWarning("ignoring invalid keybinding entry", {
@@ -714,6 +728,10 @@ const makeKeybindings = Effect.gen(function* () {
     let migratedLegacyCommandCount = 0;
     for (const [index, entry] of decodedEntries.value.entries()) {
       const normalized = normalizeLegacyKeybindingEntry(entry);
+      if (normalized.dropped) {
+        migratedLegacyCommandCount += 1;
+        continue;
+      }
       if (normalized.migrated) {
         migratedLegacyCommandCount += 1;
       }

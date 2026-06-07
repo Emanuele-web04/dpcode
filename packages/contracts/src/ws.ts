@@ -64,6 +64,7 @@ import {
 } from "./project";
 import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
+import { RunDetachedShellCommandInput } from "./shell";
 import {
   ServerConfigUpdatedPayload,
   ServerGenerateThreadRecapInput,
@@ -103,6 +104,7 @@ export const WS_METHODS = {
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
+  shellRunDetachedCommand: "shell.runDetachedCommand",
 
   // Git methods
   gitPull: "git.pull",
@@ -224,6 +226,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),
+  tagRequestBody(WS_METHODS.shellRunDetachedCommand, RunDetachedShellCommandInput),
 
   // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),
