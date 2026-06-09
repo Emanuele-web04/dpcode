@@ -82,6 +82,7 @@ const PROVIDER_COMMAND_TIMEOUT_DETAIL = "Timed out while running command.";
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
+const DEVIN_PROVIDER = "devin" as const;
 const GEMINI_PROVIDER = "gemini" as const;
 const GROK_PROVIDER = "grok" as const;
 const KILO_PROVIDER = "kilo" as const;
@@ -93,6 +94,7 @@ const PROVIDERS = [
   CODEX_PROVIDER,
   CLAUDE_AGENT_PROVIDER,
   CURSOR_PROVIDER,
+  DEVIN_PROVIDER,
   GEMINI_PROVIDER,
   GROK_PROVIDER,
   KILO_PROVIDER,
@@ -783,6 +785,15 @@ const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
   );
 
 const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURSOR_AGENT_BINARY) =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
+const runDevinCommand = (args: ReadonlyArray<string>, executable = "devin") =>
   runProviderCommand(executable, args).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
@@ -1618,6 +1629,177 @@ export const makeCheckCursorProviderStatus = (
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
+// ── Devin health check ──────────────────────────────────────────────
+
+export function parseDevinAuthStatusFromOutput(result: CommandResult): {
+  readonly status: ServerProviderStatusState;
+  readonly authStatus: ServerProviderAuthStatus;
+  readonly message?: string;
+} {
+  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
+
+  if (
+    lowerOutput.includes("not logged in") ||
+    lowerOutput.includes("not authenticated") ||
+    lowerOutput.includes("login required") ||
+    lowerOutput.includes("authentication required") ||
+    lowerOutput.includes("run `devin auth login`") ||
+    lowerOutput.includes("run devin auth login")
+  ) {
+    return {
+      status: "error",
+      authStatus: "unauthenticated",
+      message: "Devin CLI is not authenticated. Run `devin auth login` and try again.",
+    };
+  }
+
+  const parsedAuth = (() => {
+    const trimmed = result.stdout.trim();
+    if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
+    }
+    try {
+      return {
+        attemptedJsonParse: true as const,
+        auth: extractAuthBoolean(JSON.parse(trimmed)),
+      };
+    } catch {
+      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
+    }
+  })();
+
+  if (parsedAuth.auth === true) {
+    return { status: "ready", authStatus: "authenticated" };
+  }
+  if (parsedAuth.auth === false) {
+    return {
+      status: "error",
+      authStatus: "unauthenticated",
+      message: "Devin CLI is not authenticated. Run `devin auth login` and try again.",
+    };
+  }
+  if (parsedAuth.attemptedJsonParse) {
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message:
+        "Could not verify Devin authentication status from JSON output (missing auth marker).",
+    };
+  }
+  if (result.code === 0) {
+    return { status: "ready", authStatus: "authenticated" };
+  }
+
+  const detail = detailFromResult(result);
+  return {
+    status: "warning",
+    authStatus: "unknown",
+    message: detail
+      ? `Could not verify Devin authentication status. ${detail}`
+      : "Could not verify Devin authentication status.",
+  };
+}
+
+export const makeCheckDevinProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "devin";
+
+    const versionProbe = yield* runDevinCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Devin CLI (`devin`) is not installed or not on PATH."
+          : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Devin CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Devin CLI is installed but failed to run. ${detail}`
+          : "Devin CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
+    const authProbe = yield* runDevinCommand(["auth", "status"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(authProbe)) {
+      const error = authProbe.failure;
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Could not verify Devin authentication status: ${error.message}.`
+            : "Could not verify Devin authentication status.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(authProbe.success)) {
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message: "Could not verify Devin authentication status. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const parsed = parseDevinAuthStatusFromOutput(authProbe.success.value);
+    return {
+      provider: DEVIN_PROVIDER,
+      status: parsed.status,
+      available: true,
+      authStatus: parsed.authStatus,
+      version: parsedVersion,
+      checkedAt,
+      ...(parsed.message ? { message: parsed.message } : {}),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses): boolean {
@@ -1766,6 +1948,8 @@ export const ProviderHealthLive = Layer.effect(
           return settings.providers.claudeAgent.binaryPath;
         case "cursor":
           return settings.providers.cursor.binaryPath;
+        case "devin":
+          return settings.providers.devin.binaryPath;
         case "gemini":
           return settings.providers.gemini.binaryPath;
         case "grok":
@@ -1791,6 +1975,15 @@ export const ProviderHealthLive = Layer.effect(
             ),
             updateArgs: ["update"],
             updateLockKey: "cursor-agent",
+          });
+        }
+        if (provider === "devin") {
+          return makeProviderMaintenanceCapabilities({
+            provider,
+            packageName: null,
+            updateExecutable: getProviderBinaryPath(provider, settings)?.trim() || "devin",
+            updateArgs: ["update"],
+            updateLockKey: "devin-native",
           });
         }
         const definition = PACKAGE_MANAGED_PROVIDER_UPDATES[provider];
@@ -1895,6 +2088,7 @@ export const ProviderHealthLive = Layer.effect(
                 settings.providers.claudeAgent.binaryPath,
               ),
               makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+              makeCheckDevinProviderStatus(settings.providers.devin.binaryPath),
               makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
               makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
               makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),

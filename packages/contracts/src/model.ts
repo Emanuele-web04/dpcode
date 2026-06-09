@@ -127,10 +127,14 @@ export const GrokModelOptions = Schema.Struct({
 });
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
+export const DevinModelOptions = Schema.Struct({});
+export type DevinModelOptions = typeof DevinModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
+  devin: Schema.optional(DevinModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
   grok: Schema.optional(GrokModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
@@ -546,13 +550,92 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  devin: [
+    {
+      slug: "adaptive",
+      name: "Adaptive",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "swe-1-6",
+      name: "SWE 1.6",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "swe-1-6-fast",
+      name: "SWE 1.6 Fast",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "claude-opus-4-8-medium",
+      name: "Claude Opus 4.8 Medium",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "gpt-5-5-medium",
+      name: "GPT-5.5 Medium",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "gemini-3-5-flash-medium",
+      name: "Gemini 3.5 Flash Medium",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
 type BuiltInModelSlug = (typeof MODEL_OPTIONS_BY_PROVIDER)[ProviderKind][number]["slug"];
 export type ModelSlug = BuiltInModelSlug | (string & {});
 
-export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
+export type ProviderWithDefaultModel = Exclude<ProviderKind, "devin" | "pi">;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
   codex: "gpt-5.5",
@@ -613,6 +696,14 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "codex-5.3": "gpt-5.3-codex",
     "gemini-3": "gemini-3-pro",
   },
+  devin: {
+    swe: "swe",
+    opus: "opus",
+    sonnet: "sonnet",
+    gpt: "gpt",
+    codex: "codex",
+    gemini: "gemini",
+  },
   gemini: {
     auto: "auto-gemini-3",
     "auto-gemini-3": "auto-gemini-3",
@@ -672,6 +763,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
+  devin: "Devin",
   gemini: "Gemini",
   grok: "Grok",
   kilo: "Kilo",

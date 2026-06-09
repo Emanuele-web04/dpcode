@@ -1248,6 +1248,7 @@ describe("composerDraftStore modelSelection", () => {
         grok: [],
         kilo: [],
         opencode: [],
+        devin: [],
         pi: [],
       },
       availableModelOptionsByProvider: {
@@ -1275,6 +1276,7 @@ describe("composerDraftStore modelSelection", () => {
         grok: [],
         kilo: [],
         opencode: [],
+        devin: [],
         pi: [],
       },
       availableModelOptionsByProvider: {
@@ -1307,6 +1309,7 @@ describe("composerDraftStore modelSelection", () => {
         grok: [],
         kilo: [],
         opencode: [],
+        devin: [],
         pi: [],
       },
       availableModelOptionsByProvider: {
@@ -1339,6 +1342,7 @@ describe("composerDraftStore modelSelection", () => {
         grok: [],
         kilo: [],
         opencode: [],
+        devin: [],
         pi: [],
       },
       availableModelOptionsByProvider: {
