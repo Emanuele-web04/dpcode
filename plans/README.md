@@ -19,13 +19,13 @@ update your row when done.
 
 ## Execution order & status
 
-| Plan | Title | Priority | Effort | Depends on | Status |
-|------|-------|----------|--------|------------|--------|
-| 001 | Single source of truth for Devin models (DevinModelCatalog + runtime-first listModels) | P1 | M | — | IN PROGRESS |
-| 002 | Extract DevinModeMapper | P2 | S | — | TODO |
-| 003 | Structured user-input via ACP form elicitation | P1 | M | — | TODO |
-| 004 | Native slash-command discovery via `available_commands_update` | P2 | M | — | TODO |
-| 005 | Align Devin health auth with runtime auth (WINDSURF_API_KEY) | P3 | S | — | TODO |
+| Plan | Title                                                                                  | Priority | Effort | Depends on | Status      |
+| ---- | -------------------------------------------------------------------------------------- | -------- | ------ | ---------- | ----------- |
+| 001 | Single source of truth for Devin models (DevinModelCatalog + runtime-first listModels) | P1 | M | — | DONE |
+| 002  | Extract DevinModeMapper                                                                | P2       | S      | —          | TODO        |
+| 003  | Structured user-input via ACP form elicitation                                         | P1       | M      | —          | TODO        |
+| 004  | Native slash-command discovery via `available_commands_update`                         | P2       | M      | —          | TODO        |
+| 005  | Align Devin health auth with runtime auth (WINDSURF_API_KEY)                           | P3       | S      | —          | TODO        |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
