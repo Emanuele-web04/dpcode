@@ -21,18 +21,18 @@ path arguments to Vitest.
 
 ## Execution order & status
 
-| Plan | Title                                                                                  | Priority | Effort | Depends on | Status      |
-| ---- | -------------------------------------------------------------------------------------- | -------- | ------ | ---------- | ----------- |
-| 001  | Single source of truth for Devin models (DevinModelCatalog + runtime-first listModels) | P1       | M      | —          | DONE        |
-| 002  | Extract DevinModeMapper                                                                | P2       | S      | —          | DONE        |
-| 003  | Structured user-input via ACP form elicitation                                         | P1       | M      | —          | DONE        |
-| 004  | Native slash-command discovery via `available_commands_update`                         | P2       | M      | —          | DONE        |
-| 005  | Align Devin health auth with runtime auth (WINDSURF_API_KEY)                           | P3       | S      | —          | DONE        |
-| 010  | Replace invalid path-forwarded `bun run test` commands in Devin plans                  | P1       | S      | —          | DONE        |
-| 006  | Harden Devin ACP form elicitation with adapter tests and server-side answer validation | P1       | M      | —          | DONE        |
-| 007  | Make Devin slash-command discovery thread-scoped and prove runtime command updates     | P1       | S      | —          | DONE        |
-| 008  | Stop guessing ACP model config id when the session does not advertise one              | P2       | S      | —          | DONE        |
-| 009  | Redact persisted user-input resolved answers across providers                          | P2       | M      | —          | DONE        |
+| Plan | Title                                                                                  | Priority | Effort | Depends on | Status |
+| ---- | -------------------------------------------------------------------------------------- | -------- | ------ | ---------- | ------ |
+| 001  | Single source of truth for Devin models (DevinModelCatalog + runtime-first listModels) | P1       | M      | —          | DONE   |
+| 002  | Extract DevinModeMapper                                                                | P2       | S      | —          | DONE   |
+| 003  | Structured user-input via ACP form elicitation                                         | P1       | M      | —          | DONE   |
+| 004  | Native slash-command discovery via `available_commands_update`                         | P2       | M      | —          | DONE   |
+| 005  | Align Devin health auth with runtime auth (WINDSURF_API_KEY)                           | P3       | S      | —          | DONE   |
+| 010  | Replace invalid path-forwarded `bun run test` commands in Devin plans                  | P1       | S      | —          | DONE   |
+| 006  | Harden Devin ACP form elicitation with adapter tests and server-side answer validation | P1       | M      | —          | DONE   |
+| 007  | Make Devin slash-command discovery thread-scoped and prove runtime command updates     | P1       | S      | —          | DONE   |
+| 008  | Stop guessing ACP model config id when the session does not advertise one              | P2       | S      | —          | DONE   |
+| 009  | Redact persisted user-input resolved answers across providers                          | P2       | M      | —          | DONE   |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 

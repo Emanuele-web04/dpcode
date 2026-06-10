@@ -38,6 +38,7 @@ function makeMockRuntime(input?: {
     ) => Effect.Effect<EffectAcpSchema.ElicitationResponse, EffectAcpErrors.AcpError>,
   ) => void;
   readonly availableCommands?: ReadonlyArray<{ name: string; description?: string }>;
+  readonly onStart?: () => void;
 }) {
   return {
     handleRequestPermission: () => Effect.void,
@@ -63,12 +64,15 @@ function makeMockRuntime(input?: {
     handleExtRequest: () => Effect.void,
     handleExtNotification: () => Effect.void,
     start: () =>
-      Effect.succeed({
-        sessionId: input?.sessionId ?? "devin-session-1",
-        initializeResult: { protocolVersion: 1, authMethods: [] },
-        sessionSetupResult: { sessionId: input?.sessionId ?? "devin-session-1" },
-        modelConfigId: undefined,
-      } as unknown as AcpSessionRuntimeStartResult),
+      Effect.sync(() => {
+        input?.onStart?.();
+        return {
+          sessionId: input?.sessionId ?? "devin-session-1",
+          initializeResult: { protocolVersion: 1, authMethods: [] },
+          sessionSetupResult: { sessionId: input?.sessionId ?? "devin-session-1" },
+          modelConfigId: undefined,
+        } as unknown as AcpSessionRuntimeStartResult;
+      }),
     getEvents: () => Stream.empty,
     getModeState: Effect.succeed(input?.modeState),
     getConfigOptions: Effect.succeed(input?.configOptions ?? []),
@@ -113,20 +117,49 @@ describe("buildDevinAcpSpawnInput", () => {
 
 describe("resolveDevinAcpAuthMethodId", () => {
   it.effect("selects the Windsurf API key auth method when WINDSURF_API_KEY is present", () =>
-    Effect.gen(function* () {
-      const previous = process.env.WINDSURF_API_KEY;
-      process.env.WINDSURF_API_KEY = "test-key";
-      const method = yield* resolveDevinAcpAuthMethodId({
-        protocolVersion: 1,
-        authMethods: [{ id: "windsurf-api-key", name: "Windsurf API Key" }],
-      });
-      if (previous === undefined) {
-        delete process.env.WINDSURF_API_KEY;
-      } else {
-        process.env.WINDSURF_API_KEY = previous;
-      }
-      assert.strictEqual(method, "windsurf-api-key");
-    }),
+    Effect.acquireUseRelease(
+      Effect.sync(() => process.env.WINDSURF_API_KEY),
+      () =>
+        Effect.gen(function* () {
+          process.env.WINDSURF_API_KEY = "test-key";
+          const method = yield* resolveDevinAcpAuthMethodId({
+            protocolVersion: 1,
+            authMethods: [{ id: "windsurf-api-key", name: "Windsurf API Key" }],
+          });
+          assert.strictEqual(method, "windsurf-api-key");
+        }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) {
+            delete process.env.WINDSURF_API_KEY;
+          } else {
+            process.env.WINDSURF_API_KEY = previous;
+          }
+        }),
+    ),
+  );
+
+  it.effect("selects Devin ACP auth when WINDSURF_API_KEY is absent", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => process.env.WINDSURF_API_KEY),
+      () =>
+        Effect.gen(function* () {
+          delete process.env.WINDSURF_API_KEY;
+          const method = yield* resolveDevinAcpAuthMethodId({
+            protocolVersion: 1,
+            authMethods: [{ id: "windsurf-api-key", name: "Windsurf API Key" }],
+          });
+          assert.strictEqual(method, "windsurf-api-key");
+        }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) {
+            delete process.env.WINDSURF_API_KEY;
+          } else {
+            process.env.WINDSURF_API_KEY = previous;
+          }
+        }),
+    ),
   );
 
   it.effect("fails clearly when no supported auth method is advertised", () =>

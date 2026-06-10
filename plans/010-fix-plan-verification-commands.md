@@ -69,10 +69,10 @@ Repo convention:
 
 ## Commands you will need
 
-| Purpose | Command | Expected on success |
-| --- | --- | --- |
-| Find invalid commands in older plans | `rg "bun run test --" plans/001-devin-model-catalog-single-source.md plans/003-devin-user-input-elicitation.md plans/004-devin-slash-command-discovery.md plans/005-devin-health-auth-alignment.md plans/REVIEW.md` | no matches after edit |
-| Final doc grep | `rg "bunx vitest run" plans/00*.md plans/RUN.md plans/README.md` | scoped test commands remain visible |
+| Purpose                              | Command                                                                                                                                                                                                             | Expected on success                 |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Find invalid commands in older plans | `rg "bun run test --" plans/001-devin-model-catalog-single-source.md plans/003-devin-user-input-elicitation.md plans/004-devin-slash-command-discovery.md plans/005-devin-health-auth-alignment.md plans/REVIEW.md` | no matches after edit               |
+| Final doc grep                       | `rg "bunx vitest run" plans/00*.md plans/RUN.md plans/README.md`                                                                                                                                                    | scoped test commands remain visible |
 
 Do not run `bun fmt`, `bun lint`, `bun typecheck`, or tests for this docs-only plan
 unless the operator explicitly asks; this plan only edits markdown command text.

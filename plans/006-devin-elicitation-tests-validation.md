@@ -37,46 +37,47 @@ plan closes both gaps with behavior tests and server-side answer validation.
 
 ```ts
 // apps/server/src/provider/Layers/DevinAdapter.ts:331-369
-yield* acp.handleElicitation((request) =>
-  Effect.gen(function* () {
-    if (request.mode !== "form") {
-      return { action: { action: "decline" as const } };
-    }
-    const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
-    const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
-    const answers = yield* Deferred.make<ProviderUserInputAnswers>();
-    pendingUserInputs.set(requestId, { answers });
-    yield* publish({
-      type: "user-input.requested",
-      ...(yield* makeEventStamp()),
-      provider: PROVIDER,
-      threadId: input.threadId,
-      turnId: ctx?.activeTurnId,
-      requestId: runtimeRequestId,
-      payload: { questions: elicitationFormToUserInputQuestions(request) },
-      raw: {
-        source: "acp.jsonrpc",
-        method: "session/elicitation",
-        payload: request,
-      },
-    });
-    const resolved = yield* Deferred.await(answers);
-    pendingUserInputs.delete(requestId);
-    yield* publish({
-      type: "user-input.resolved",
-      ...(yield* makeEventStamp()),
-      provider: PROVIDER,
-      threadId: input.threadId,
-      turnId: ctx?.activeTurnId,
-      requestId: runtimeRequestId,
-      payload: { answers: resolved },
-    });
-    const content = userInputAnswersToElicitationContent(request, resolved);
-    return Object.keys(content).length > 0
-      ? { action: { action: "accept" as const, content } }
-      : { action: { action: "cancel" as const } };
-  }),
-);
+yield *
+  acp.handleElicitation((request) =>
+    Effect.gen(function* () {
+      if (request.mode !== "form") {
+        return { action: { action: "decline" as const } };
+      }
+      const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+      const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+      const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+      pendingUserInputs.set(requestId, { answers });
+      yield* publish({
+        type: "user-input.requested",
+        ...(yield* makeEventStamp()),
+        provider: PROVIDER,
+        threadId: input.threadId,
+        turnId: ctx?.activeTurnId,
+        requestId: runtimeRequestId,
+        payload: { questions: elicitationFormToUserInputQuestions(request) },
+        raw: {
+          source: "acp.jsonrpc",
+          method: "session/elicitation",
+          payload: request,
+        },
+      });
+      const resolved = yield* Deferred.await(answers);
+      pendingUserInputs.delete(requestId);
+      yield* publish({
+        type: "user-input.resolved",
+        ...(yield* makeEventStamp()),
+        provider: PROVIDER,
+        threadId: input.threadId,
+        turnId: ctx?.activeTurnId,
+        requestId: runtimeRequestId,
+        payload: { answers: resolved },
+      });
+      const content = userInputAnswersToElicitationContent(request, resolved);
+      return Object.keys(content).length > 0
+        ? { action: { action: "accept" as const, content } }
+        : { action: { action: "cancel" as const } };
+    }),
+  );
 ```
 
 - `apps/server/src/provider/Layers/DevinAdapter.ts:88-90` currently stores only
@@ -155,12 +156,12 @@ Repo conventions:
 
 ## Commands you will need
 
-| Purpose | Command | Expected on success |
-| --- | --- | --- |
-| Elicitation helper tests | `bunx vitest run apps/server/src/provider/acp/DevinElicitation.test.ts` | all pass |
-| Devin adapter tests | `bunx vitest run apps/server/src/provider/Layers/DevinAdapter.test.ts` | all pass |
-| Provider tests | `bunx vitest run apps/server/src/provider/**/*.test.ts` | all pass or existing skips only |
-| Final gate | `bun fmt && bun lint && bun typecheck` | exits 0; lint has 0 errors |
+| Purpose                  | Command                                                                 | Expected on success             |
+| ------------------------ | ----------------------------------------------------------------------- | ------------------------------- |
+| Elicitation helper tests | `bunx vitest run apps/server/src/provider/acp/DevinElicitation.test.ts` | all pass                        |
+| Devin adapter tests      | `bunx vitest run apps/server/src/provider/Layers/DevinAdapter.test.ts`  | all pass                        |
+| Provider tests           | `bunx vitest run apps/server/src/provider/**/*.test.ts`                 | all pass or existing skips only |
+| Final gate               | `bun fmt && bun lint && bun typecheck`                                  | exits 0; lint has 0 errors      |
 
 ## Scope
 
@@ -270,11 +271,14 @@ In `respondToUserInput`, after finding `pending`, call the validation helper wit
 Use operation/method wording that points at Devin elicitation, for example:
 
 ```ts
-return yield* new ProviderAdapterValidationError({
-  provider: PROVIDER,
-  operation: "respondToUserInput",
-  issue: `Invalid Devin elicitation answers: ${validation.issues.join("; ")}`,
-});
+return (
+  yield *
+  new ProviderAdapterValidationError({
+    provider: PROVIDER,
+    operation: "respondToUserInput",
+    issue: `Invalid Devin elicitation answers: ${validation.issues.join("; ")}`,
+  })
+);
 ```
 
 Do not resolve the deferred on invalid input. Leave the pending request in place so
@@ -288,7 +292,9 @@ Extend `DevinAdapter.test.ts` using the existing `onHandleElicitation` hook.
 Capture the handler in a local variable:
 
 ```ts
-let elicitationHandler: Parameters<NonNullable<Parameters<typeof makeMockRuntime>[0]>["onHandleElicitation"]>[0] | undefined;
+let elicitationHandler:
+  | Parameters<NonNullable<Parameters<typeof makeMockRuntime>[0]>["onHandleElicitation"]>[0]
+  | undefined;
 ```
 
 If that type is awkward, define a local explicit handler type using

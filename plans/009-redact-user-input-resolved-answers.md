@@ -81,20 +81,22 @@ if (event.type === "user-input.resolved") {
 
 ```ts
 // apps/server/src/provider/Layers/CursorAdapter.ts:678-684
-yield* offerRuntimeEvent({
-  type: "user-input.resolved",
-  // ...
-  payload: { answers: resolved },
-});
+yield *
+  offerRuntimeEvent({
+    type: "user-input.resolved",
+    // ...
+    payload: { answers: resolved },
+  });
 ```
 
 ```ts
 // apps/server/src/provider/Layers/DevinAdapter.ts:356-364
-yield* publish({
-  type: "user-input.resolved",
-  // ...
-  payload: { answers: resolved },
-});
+yield *
+  publish({
+    type: "user-input.resolved",
+    // ...
+    payload: { answers: resolved },
+  });
 ```
 
 - Web/shared consumers inspect user-input resolved activities. Search before
@@ -110,13 +112,13 @@ Repo conventions:
 
 ## Commands you will need
 
-| Purpose | Command | Expected on success |
-| --- | --- | --- |
-| Contracts tests | `bunx vitest run packages/contracts/src/providerRuntime.test.ts` | all pass |
-| Ingestion tests | `bunx vitest run apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts` | all pass |
-| Web/store tests | `bunx vitest run apps/web/src/store.test.ts apps/web/src/session-logic.test.ts` | all pass |
-| Shared tests | `bunx vitest run packages/shared/src/threadSummary.test.ts` | all pass if file exists; otherwise skip with note |
-| Final gate | `bun fmt && bun lint && bun typecheck` | exits 0; lint has 0 errors |
+| Purpose         | Command                                                                                 | Expected on success                               |
+| --------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Contracts tests | `bunx vitest run packages/contracts/src/providerRuntime.test.ts`                        | all pass                                          |
+| Ingestion tests | `bunx vitest run apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts` | all pass                                          |
+| Web/store tests | `bunx vitest run apps/web/src/store.test.ts apps/web/src/session-logic.test.ts`         | all pass                                          |
+| Shared tests    | `bunx vitest run packages/shared/src/threadSummary.test.ts`                             | all pass if file exists; otherwise skip with note |
+| Final gate      | `bun fmt && bun lint && bun typecheck`                                                  | exits 0; lint has 0 errors                        |
 
 ## Scope
 
@@ -178,7 +180,9 @@ redacted shape.
 Add a small local helper near the activity conversion helpers:
 
 ```ts
-function redactedUserInputResolvedPayload(event: Extract<ProviderRuntimeEvent, { type: "user-input.resolved" }>) {
+function redactedUserInputResolvedPayload(
+  event: Extract<ProviderRuntimeEvent, { type: "user-input.resolved" }>,
+) {
   return {
     ...(event.requestId ? { requestId: event.requestId } : {}),
     answeredQuestionIds: Object.keys(event.payload.answers).sort(),

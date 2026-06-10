@@ -488,7 +488,7 @@ describe("provider-indexed custom model settings", () => {
     customGrokModels: ["grok/custom-fast"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
-    customDevinModels: ["sonnet"],
+    customDevinModels: ["sonnet", "devin/custom-model"],
     customPiModels: ["anthropic/custom-pi"],
   } as const;
 
@@ -514,7 +514,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
-    expect(getCustomModelsForProvider(settings, "devin")).toEqual(["sonnet"]);
+    expect(getCustomModelsForProvider(settings, "devin")).toEqual(["sonnet", "devin/custom-model"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
   });
 
@@ -607,7 +607,7 @@ describe("provider-indexed custom model settings", () => {
       grok: ["grok/custom-fast"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
-      devin: ["sonnet"],
+      devin: ["sonnet", "devin/custom-model"],
       pi: ["anthropic/custom-pi"],
     });
   });
@@ -636,7 +636,9 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toBe(true);
-    expect(modelOptionsByProvider.devin.some((option) => option.slug === "sonnet")).toBe(true);
+    expect(
+      modelOptionsByProvider.devin.some((option) => option.slug === "devin/custom-model"),
+    ).toBe(true);
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
       true,
     );

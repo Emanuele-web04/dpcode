@@ -160,6 +160,21 @@ function settlePendingUserInputsAsEmptyAnswers(
   ).pipe(Effect.andThen(Effect.sync(() => pendingUserInputs.clear())));
 }
 
+function extractDevinModelsFromConfigOptions(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+) {
+  const modelOption = configOptions.find((opt) => opt.category === "model");
+  if (!modelOption || modelOption.type !== "select") {
+    return [];
+  }
+
+  return modelOption.options.flatMap((entry) =>
+    "value" in entry
+      ? [{ slug: entry.value, name: entry.name ?? entry.value }]
+      : entry.options.map((option) => ({ slug: option.value, name: option.name ?? option.value })),
+  );
+}
+
 function makeDefaultRuntimeFactory(input: DevinAcpRuntimeFactoryInput) {
   const acpNativeLoggers = makeAcpNativeLoggers({
     nativeEventLogger: input.nativeEventLogger,
@@ -846,13 +861,7 @@ function makeProviderAdapter(
           for (const ctx of sessions.values()) {
             if (ctx.stopped) continue;
             const configOptions = yield* ctx.acp.getConfigOptions;
-            const modelOption = configOptions.find((opt) => opt.category === "model");
-            if (!modelOption || modelOption.type !== "select") continue;
-            const models = modelOption.options.flatMap((entry) =>
-              "value" in entry
-                ? [{ slug: entry.value, name: entry.name ?? entry.value }]
-                : entry.options.map((o) => ({ slug: o.value, name: o.name ?? o.value })),
-            );
+            const models = extractDevinModelsFromConfigOptions(configOptions);
             if (models.length > 0) {
               return { models, source: "devin.acp", cached: false };
             }

@@ -34,8 +34,8 @@ model switching fail early with a clear error instead of relying on a magic id.
   `modelConfigId` from session setup:
 
 ```ts
-yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
-yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
+yield * Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
+yield * Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
 
 const nextState = {
   sessionId,
@@ -60,7 +60,7 @@ setModel: (model) =>
   options but deliberately returns success when a config id is unknown:
 
 ```ts
-const configOption = findSessionConfigOption(yield* Ref.get(configOptionsRef), configId);
+const configOption = findSessionConfigOption(yield * Ref.get(configOptionsRef), configId);
 if (!configOption) {
   return;
 }
@@ -70,13 +70,14 @@ if (!configOption) {
   `setModel` failures into provider adapter errors:
 
 ```ts
-yield* acp
-  .setModel(selectedModel)
-  .pipe(
-    Effect.mapError((error) =>
-      mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", error),
-    ),
-  );
+yield *
+  acp
+    .setModel(selectedModel)
+    .pipe(
+      Effect.mapError((error) =>
+        mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", error),
+      ),
+    );
 ```
 
 Repo conventions:
@@ -88,12 +89,12 @@ Repo conventions:
 
 ## Commands you will need
 
-| Purpose | Command | Expected on success |
-| --- | --- | --- |
-| ACP runtime tests | `bunx vitest run apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts` | all pass |
-| Devin adapter tests | `bunx vitest run apps/server/src/provider/Layers/DevinAdapter.test.ts` | all pass |
-| Provider tests | `bunx vitest run apps/server/src/provider/**/*.test.ts` | all pass or existing skips only |
-| Final gate | `bun fmt && bun lint && bun typecheck` | exits 0; lint has 0 errors |
+| Purpose             | Command                                                                     | Expected on success             |
+| ------------------- | --------------------------------------------------------------------------- | ------------------------------- |
+| ACP runtime tests   | `bunx vitest run apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts` | all pass                        |
+| Devin adapter tests | `bunx vitest run apps/server/src/provider/Layers/DevinAdapter.test.ts`      | all pass                        |
+| Provider tests      | `bunx vitest run apps/server/src/provider/**/*.test.ts`                     | all pass or existing skips only |
+| Final gate          | `bun fmt && bun lint && bun typecheck`                                      | exits 0; lint has 0 errors      |
 
 ## Scope
 
@@ -126,7 +127,7 @@ If it is missing, fail with `new EffectAcpErrorsRuntime.AcpRequestError(...)` or
 the equivalent runtime import already used in this file. Use a clear message:
 
 ```ts
-"ACP session did not advertise a model config option."
+"ACP session did not advertise a model config option.";
 ```
 
 Include diagnostic data such as available config option ids from `configOptionsRef`.

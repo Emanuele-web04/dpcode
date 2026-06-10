@@ -66,7 +66,7 @@ listCommands: (input) =>
 ```ts
 for (const event of parsed.events) {
   if (event._tag === "AvailableCommandsUpdated") {
-    yield* Ref.set(availableCommandsRef, event.commands);
+    yield * Ref.set(availableCommandsRef, event.commands);
   }
   // ... other event handling
 }
@@ -94,12 +94,12 @@ Repo conventions:
 
 ## Commands you will need
 
-| Purpose | Command | Expected on success |
-| --- | --- | --- |
-| Devin adapter tests | `bunx vitest run apps/server/src/provider/Layers/DevinAdapter.test.ts` | all pass |
-| ACP runtime tests | `bunx vitest run apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts apps/server/src/provider/acp/AcpRuntimeModel.test.ts` | all pass |
-| Provider tests | `bunx vitest run apps/server/src/provider/**/*.test.ts` | all pass or existing skips only |
-| Final gate | `bun fmt && bun lint && bun typecheck` | exits 0; lint has 0 errors |
+| Purpose             | Command                                                                                                                          | Expected on success             |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Devin adapter tests | `bunx vitest run apps/server/src/provider/Layers/DevinAdapter.test.ts`                                                           | all pass                        |
+| ACP runtime tests   | `bunx vitest run apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts apps/server/src/provider/acp/AcpRuntimeModel.test.ts` | all pass                        |
+| Provider tests      | `bunx vitest run apps/server/src/provider/**/*.test.ts`                                                                          | all pass or existing skips only |
+| Final gate          | `bun fmt && bun lint && bun typecheck`                                                                                           | exits 0; lint has 0 errors      |
 
 ## Scope
 
