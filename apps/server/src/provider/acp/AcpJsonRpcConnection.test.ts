@@ -15,6 +15,52 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
 const bunExe = "bun";
 
+// Minimal raw NDJSON ACP agent for the available_commands_update test below.
+// The shared scripts/acp-mock-agent.ts never emits that notification, so this
+// test-only helper answers the start handshake and pushes a session/update
+// with slash commands right after session/new. Run via `bun -e`.
+const availableCommandsAgentScript = `
+let buffer = "";
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (let index = buffer.indexOf("\\n"); index >= 0; index = buffer.indexOf("\\n")) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { protocolVersion: 1, agentCapabilities: {} },
+      });
+    } else if (message.method === "authenticate") {
+      send({ jsonrpc: "2.0", id: message.id, result: {} });
+    } else if (message.method === "session/new") {
+      send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "mock-session-1" } });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "/revert", description: "Revert changes" },
+              { name: "/steps", description: "" },
+            ],
+          },
+        },
+      });
+    } else if (message.id !== undefined) {
+      send({ jsonrpc: "2.0", id: message.id, result: {} });
+    }
+  }
+});
+`;
+
 describe("AcpSessionRuntime", () => {
   it.effect("merges custom initialize client capabilities into the ACP handshake", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
@@ -394,6 +440,38 @@ describe("AcpSessionRuntime", () => {
       Effect.provide(NodeServices.layer),
     );
   });
+
+  it.effect("stores ACP available_commands_update and exposes it via getAvailableCommands", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      // Deterministic sync: the runtime publishes the parsed update on its
+      // event stream, so the ref is guaranteed set once the event arrives.
+      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 1)));
+      expect(notes.map((note) => note._tag)).toEqual(["AvailableCommandsUpdated"]);
+
+      const commands = yield* runtime.getAvailableCommands;
+      expect(commands).toEqual([
+        { name: "/revert", description: "Revert changes" },
+        { name: "/steps" },
+      ]);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: ["-e", availableCommandsAgentScript],
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          authMethodId: "test",
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
 
   it.effect("rejects invalid config option values before sending session/set_config_option", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "acp-runtime-"));
