@@ -11,6 +11,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
+import { isWorkspaceRelativePathSafe } from "@t3tools/shared/path";
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
@@ -1891,7 +1892,14 @@ function SingleChatSurface(props: {
     [dockState.panes, props.threadId, requestImmediateDockHydration, setActivePane],
   );
 
-  const selectedEditorFilePath = props.search.editorFilePath ?? null;
+  // The editor file path arrives via the URL, so an attacker-crafted link can
+  // carry traversal segments ("../../etc"). Treat unsafe values as no selection
+  // so neither the ancestor prefetch nor the preview ever queries them.
+  const rawEditorFilePath = props.search.editorFilePath ?? null;
+  const selectedEditorFilePath =
+    rawEditorFilePath !== null && isWorkspaceRelativePathSafe(rawEditorFilePath)
+      ? rawEditorFilePath
+      : null;
   const editorWorkspaceRoot = activeProject?.cwd ?? null;
   useEffect(() => {
     if (!selectedEditorFilePath) {

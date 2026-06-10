@@ -265,6 +265,25 @@ describe("listWorkspaceDirectories", () => {
       { path: "README.md", name: "README.md", kind: "file" },
     ]);
   });
+
+  it("rejects relative paths that escape the workspace root", async () => {
+    const cwd = makeTempDir("t3code-workspace-list-directories-");
+    writeFile(cwd, "docs/guide.md", "# guide");
+
+    for (const relativePath of ["..", "../..", "docs/../../etc", "/etc"]) {
+      await expect(
+        listWorkspaceDirectories({ cwd, includeFiles: true, relativePath }),
+      ).rejects.toThrow("outside the workspace root");
+    }
+
+    // Traversal that stays contained inside the root is still allowed.
+    const contained = await listWorkspaceDirectories({
+      cwd,
+      includeFiles: true,
+      relativePath: "docs/../docs",
+    });
+    expect(contained.entries.map((entry) => entry.name)).toEqual(["guide.md"]);
+  });
 });
 
 describe("discoverProjectScripts", () => {
