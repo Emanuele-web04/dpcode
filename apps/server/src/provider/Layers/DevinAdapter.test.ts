@@ -1,8 +1,13 @@
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, Stream } from "effect";
+import { Effect, Fiber, Option, Stream } from "effect";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  ThreadId,
+  type ProviderRuntimeEvent,
+  type RuntimeRequestId,
+} from "@t3tools/contracts";
 
 import type {
   AcpSessionRuntimeShape,
@@ -649,6 +654,237 @@ describe("DevinAdapterLive", () => {
                 },
               }),
             ),
+        }),
+      ),
+    );
+  });
+
+  type ElicitationHandler = (
+    request: EffectAcpSchema.ElicitationRequest,
+  ) => Effect.Effect<EffectAcpSchema.ElicitationResponse, EffectAcpErrors.AcpError>;
+
+  type UserInputRequestedEvent = Extract<
+    ProviderRuntimeEvent,
+    { type: "user-input.requested"; requestId: RuntimeRequestId }
+  >;
+  type UserInputResolvedEvent = Extract<ProviderRuntimeEvent, { type: "user-input.resolved" }>;
+
+  const enumFormRequest: EffectAcpSchema.ElicitationRequest = {
+    mode: "form",
+    sessionId: "devin-session-1",
+    message: "Pick one",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        choice: { type: "string", enum: ["a", "b"] },
+      },
+    },
+  };
+
+  const elicitationCapturingLayer = (capture: (handler: ElicitationHandler) => void) =>
+    makeDevinAdapterLive({
+      makeRuntime: () =>
+        Effect.succeed(
+          makeMockRuntime({
+            onHandleElicitation: capture,
+          }),
+        ),
+    });
+
+  it.effect(
+    "publishes user-input.requested for a Devin form elicitation and resolves with accepted answers",
+    () => {
+      let elicitationHandler: ElicitationHandler | undefined;
+      return Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        yield* adapter.startSession({
+          threadId,
+          provider: "devin",
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        assert.isDefined(elicitationHandler);
+
+        const requestedFiber = yield* Stream.runHead(
+          Stream.filter(
+            adapter.streamEvents,
+            (event): event is UserInputRequestedEvent => event.type === "user-input.requested",
+          ),
+        ).pipe(Effect.forkChild);
+        const resolvedFiber = yield* Stream.runHead(
+          Stream.filter(
+            adapter.streamEvents,
+            (event): event is UserInputResolvedEvent => event.type === "user-input.resolved",
+          ),
+        ).pipe(Effect.forkChild);
+
+        const handlerFiber = yield* elicitationHandler!(enumFormRequest).pipe(Effect.forkChild);
+
+        const requested = Option.getOrThrow(yield* Fiber.join(requestedFiber));
+        assert.strictEqual(requested.threadId, threadId);
+        assert.strictEqual(requested.payload.questions.length, 1);
+        assert.strictEqual(requested.payload.questions[0]!.id, "choice");
+
+        yield* adapter.respondToUserInput(
+          threadId,
+          ApprovalRequestId.makeUnsafe(String(requested.requestId)),
+          { choice: "a" },
+        );
+
+        const result = yield* Fiber.join(handlerFiber);
+        assert.deepStrictEqual(result, {
+          action: { action: "accept", content: { choice: "a" } },
+        });
+
+        const resolved = Option.getOrThrow(yield* Fiber.join(resolvedFiber));
+        assert.strictEqual(String(resolved.requestId), String(requested.requestId));
+        assert.deepStrictEqual(resolved.payload.answers, { choice: "a" });
+
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          elicitationCapturingLayer((handler) => {
+            elicitationHandler = handler;
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("declines URL-mode elicitation without publishing user-input.requested", () => {
+    let elicitationHandler: ElicitationHandler | undefined;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      assert.isDefined(elicitationHandler);
+
+      // Collect everything up to the deterministic user-input.resolved marker.
+      // The form elicitation below proves the subscription is live before the
+      // URL handler runs, so a missing URL event is a real non-emission.
+      const eventsFiber = yield* Stream.runCollect(
+        Stream.takeUntil(adapter.streamEvents, (event) => event.type === "user-input.resolved"),
+      ).pipe(Effect.forkChild);
+      const requestedFiber = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event): event is UserInputRequestedEvent => event.type === "user-input.requested",
+        ),
+      ).pipe(Effect.forkChild);
+
+      const formFiber = yield* elicitationHandler!(enumFormRequest).pipe(Effect.forkChild);
+      const requested = Option.getOrThrow(yield* Fiber.join(requestedFiber));
+
+      const urlResult = yield* elicitationHandler!({
+        mode: "url",
+        elicitationId: "elicitation-1",
+        url: "https://example.com/auth",
+        message: "Open this URL",
+        sessionId: "devin-session-1",
+      });
+      assert.deepStrictEqual(urlResult, { action: { action: "decline" } });
+
+      yield* adapter.respondToUserInput(
+        threadId,
+        ApprovalRequestId.makeUnsafe(String(requested.requestId)),
+        { choice: "a" },
+      );
+      yield* Fiber.join(formFiber);
+
+      const events = [...(yield* Fiber.join(eventsFiber))];
+      const requestedEvents = events.filter((event) => event.type === "user-input.requested");
+      assert.strictEqual(requestedEvents.length, 1);
+      assert.strictEqual(String(requestedEvents[0]!.requestId), String(requested.requestId));
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        elicitationCapturingLayer((handler) => {
+          elicitationHandler = handler;
+        }),
+      ),
+    );
+  });
+
+  it.effect("rejects invalid answers without resolving the pending Devin elicitation", () => {
+    let elicitationHandler: ElicitationHandler | undefined;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      assert.isDefined(elicitationHandler);
+
+      const requestedFiber = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event): event is UserInputRequestedEvent => event.type === "user-input.requested",
+        ),
+      ).pipe(Effect.forkChild);
+      const handlerFiber = yield* elicitationHandler!(enumFormRequest).pipe(Effect.forkChild);
+
+      const requested = Option.getOrThrow(yield* Fiber.join(requestedFiber));
+      const requestId = ApprovalRequestId.makeUnsafe(String(requested.requestId));
+
+      const error = yield* adapter
+        .respondToUserInput(threadId, requestId, { choice: "not-allowed" })
+        .pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterValidationError");
+      assert.match(error.message, /Invalid Devin elicitation answers/);
+
+      // The pending request must survive the invalid attempt and accept a retry.
+      yield* adapter.respondToUserInput(threadId, requestId, { choice: "a" });
+      const result = yield* Fiber.join(handlerFiber);
+      assert.deepStrictEqual(result, {
+        action: { action: "accept", content: { choice: "a" } },
+      });
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        elicitationCapturingLayer((handler) => {
+          elicitationHandler = handler;
+        }),
+      ),
+    );
+  });
+
+  it.effect("stopSession settles pending user input with cancel", () => {
+    let elicitationHandler: ElicitationHandler | undefined;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      assert.isDefined(elicitationHandler);
+
+      const requestedFiber = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event): event is UserInputRequestedEvent => event.type === "user-input.requested",
+        ),
+      ).pipe(Effect.forkChild);
+      const handlerFiber = yield* elicitationHandler!(enumFormRequest).pipe(Effect.forkChild);
+
+      Option.getOrThrow(yield* Fiber.join(requestedFiber));
+      yield* adapter.stopSession(threadId);
+
+      const result = yield* Fiber.join(handlerFiber);
+      assert.deepStrictEqual(result, { action: { action: "cancel" } });
+    }).pipe(
+      Effect.provide(
+        elicitationCapturingLayer((handler) => {
+          elicitationHandler = handler;
         }),
       ),
     );
