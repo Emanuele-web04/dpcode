@@ -4,6 +4,7 @@
 // Exports: ChatMarkdown
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
+import type { ThreadMarker } from "@t3tools/contracts";
 import React, {
   Children,
   type CSSProperties,
@@ -36,15 +37,29 @@ import {
   getSyntaxHighlighterPromise,
   highlightCodeToHtmlWithFallback,
 } from "../lib/syntaxHighlighting";
-import { cn } from "~/lib/utils";
-import { FileEntryIcon } from "./chat/FileEntryIcon";
+import { getFileIconName } from "../file-icons";
+import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { useTheme } from "../hooks/useTheme";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import {
+  COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+} from "./composerInlineChip";
+import { LinkChipIcon } from "./LinkChipIcon";
 import { IconButton } from "./ui/icon-button";
+
+const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
+const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
+  "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
+const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} ${COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME}`;
+
+function isExternalHttpHref(href: string | undefined): href is string {
+  return typeof href === "string" && EXTERNAL_HTTP_HREF_PATTERN.test(href);
+}
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -74,6 +89,7 @@ interface ChatMarkdownProps {
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  markers?: readonly ThreadMarker[] | undefined;
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
@@ -87,10 +103,21 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
 ];
-const LITERAL_DOLLAR_PLACEHOLDER = "CHATMARKDOWNLITERALDOLLARPLACEHOLDER";
+const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
+// `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
+// to shorten the protected string, which shifted every downstream offset (thread-marker positions
+// are resolved against the raw text but applied against the parsed mdast positions). A two-character
+// placeholder keeps `protectLiteralMarkdownDollars` length-preserving so those offsets stay aligned;
+// it is restored ahead of the single-char placeholder (the two share no characters, so order is
+// only for clarity).
+const ESCAPED_DOLLAR_PLACEHOLDER = "\uE001\uE002";
 
 function restoreLiteralDollarPlaceholders(value: string): string {
-  return value.replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$");
+  return value
+    .replaceAll(ESCAPED_DOLLAR_PLACEHOLDER, "$")
+    .replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$")
+    .replaceAll(encodeURIComponent(ESCAPED_DOLLAR_PLACEHOLDER), "$")
+    .replaceAll(encodeURIComponent(LITERAL_DOLLAR_PLACEHOLDER), "$");
 }
 
 function restoreLiteralDollarsInNode(node: unknown): void {
@@ -119,6 +146,166 @@ const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];
+type MarkdownTextNode = {
+  type: "text";
+  value: string;
+  position?: {
+    start?: { offset?: number };
+    end?: { offset?: number };
+  };
+};
+type MarkdownParentNode = {
+  type?: string;
+  children?: MarkdownNode[];
+};
+type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
+type RenderableThreadMarker = ThreadMarker & { className: string };
+type ThreadMarkerFragmentContinuity = {
+  readonly continuesBefore: boolean;
+  readonly continuesAfter: boolean;
+};
+
+// The "active" ring (a transient deep-link highlight) is applied imperatively by the timeline so
+// it never re-parses the markdown tree; this className is the stable, parse-time-only part.
+function markerClassNameFor(marker: ThreadMarker) {
+  return [
+    "thread-marker",
+    marker.style === "highlight" ? "thread-marker-highlight" : "thread-marker-underline",
+    `thread-marker-${marker.color}`,
+    marker.done ? "thread-marker-done" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+// Joins marker fragments split by markdown nodes so bold/code boundaries still read as one mark.
+function markerFragmentClassNameFor(
+  marker: RenderableThreadMarker,
+  continuity: ThreadMarkerFragmentContinuity,
+): string {
+  return [
+    marker.className,
+    continuity.continuesBefore ? "thread-marker-continues-before" : "",
+    continuity.continuesAfter ? "thread-marker-continues-after" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function normalizeRenderableMarkers(input: {
+  text: string;
+  markers: readonly ThreadMarker[] | undefined;
+}): RenderableThreadMarker[] {
+  const markers = input.markers ?? [];
+  const result: RenderableThreadMarker[] = [];
+  let previousEnd = -1;
+  for (const marker of [...markers].sort((left, right) => left.startOffset - right.startOffset)) {
+    if (marker.startOffset < previousEnd) {
+      continue;
+    }
+    if (marker.endOffset <= marker.startOffset || marker.endOffset > input.text.length) {
+      continue;
+    }
+    if (input.text.slice(marker.startOffset, marker.endOffset) !== marker.selectedText) {
+      continue;
+    }
+    result.push({
+      ...marker,
+      className: markerClassNameFor(marker),
+    });
+    previousEnd = marker.endOffset;
+  }
+  return result;
+}
+
+function createThreadMarkerRemarkPlugin(input: {
+  text: string;
+  markers: readonly ThreadMarker[] | undefined;
+}) {
+  const markers = normalizeRenderableMarkers(input);
+  return () => (tree: MarkdownNode) => {
+    if (markers.length === 0) {
+      return;
+    }
+    applyThreadMarkersToNode(tree, markers);
+  };
+}
+
+function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly RenderableThreadMarker[]) {
+  if (!node || typeof node !== "object" || !("children" in node) || !Array.isArray(node.children)) {
+    return;
+  }
+
+  const parent = node as MarkdownParentNode;
+  // The guard above already proved `children` is an array; `?? []` only satisfies the optional type.
+  parent.children = (parent.children ?? []).flatMap((child) => {
+    if (child && typeof child === "object" && "type" in child && child.type === "text") {
+      return splitTextNodeWithMarkers(child as MarkdownTextNode, markers);
+    }
+    applyThreadMarkersToNode(child, markers);
+    return [child];
+  });
+}
+
+function splitTextNodeWithMarkers(
+  node: MarkdownTextNode,
+  markers: readonly RenderableThreadMarker[],
+): MarkdownNode[] {
+  const startOffset = node.position?.start?.offset;
+  const endOffset = node.position?.end?.offset;
+  if (startOffset === undefined || endOffset === undefined) {
+    return [node];
+  }
+  const overlappingMarkers: RenderableThreadMarker[] = [];
+  for (const marker of markers) {
+    if (marker.endOffset <= startOffset) {
+      continue;
+    }
+    if (marker.startOffset >= endOffset) {
+      break;
+    }
+    overlappingMarkers.push(marker);
+  }
+  if (overlappingMarkers.length === 0) {
+    return [node];
+  }
+
+  const nodes: MarkdownNode[] = [];
+  let cursor = 0;
+  for (const marker of overlappingMarkers) {
+    const markerStart = Math.max(0, marker.startOffset - startOffset);
+    const markerEnd = Math.min(node.value.length, marker.endOffset - startOffset);
+    if (markerStart < cursor || markerEnd > node.value.length) {
+      continue;
+    }
+    const absoluteFragmentStart = startOffset + markerStart;
+    const absoluteFragmentEnd = startOffset + markerEnd;
+    if (markerStart > cursor) {
+      nodes.push({ type: "text", value: node.value.slice(cursor, markerStart) });
+    }
+    nodes.push({
+      type: "threadMarker",
+      data: {
+        hName: "span",
+        hProperties: {
+          className: markerFragmentClassNameFor(marker, {
+            continuesBefore: absoluteFragmentStart > marker.startOffset,
+            continuesAfter: absoluteFragmentEnd < marker.endOffset,
+          }),
+          "data-thread-marker-id": marker.id,
+          "data-thread-marker-style": marker.style,
+          "data-thread-marker-color": marker.color,
+        },
+      },
+      children: [{ type: "text", value: node.value.slice(markerStart, markerEnd) }],
+    });
+    cursor = markerEnd;
+  }
+  if (cursor < node.value.length) {
+    nodes.push({ type: "text", value: node.value.slice(cursor) });
+  }
+  return nodes.length > 0 ? nodes : [node];
+}
 const INLINE_MATH_HINT_REGEX = /[\\^_=+\-*/<>()[\]{}]/;
 const ALL_CAPS_DOLLAR_IDENTIFIER_REGEX = /^[A-Z][A-Z0-9_]{1,31}$/;
 
@@ -256,7 +443,7 @@ function protectLiteralDollarsInPlainText(value: string): string {
 
   while (cursor < value.length) {
     if (value[cursor] === "\\" && value[cursor + 1] === "$") {
-      result += LITERAL_DOLLAR_PLACEHOLDER;
+      result += ESCAPED_DOLLAR_PLACEHOLDER;
       cursor += 2;
       continue;
     }
@@ -487,9 +674,8 @@ function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
   if (fence.isFileReference && fence.fileName) {
     return (
       <span className="chat-markdown-codeblock__file" title={fence.filePath ?? fence.fileName}>
-        <FileEntryIcon
-          pathValue={fence.filePath ?? fence.fileName}
-          kind="file"
+        <CentralIcon
+          name={getFileIconName(fence.filePath ?? fence.fileName)}
           className="chat-markdown-codeblock__file-icon"
         />
         <span className="chat-markdown-codeblock__file-name">{fence.fileName}</span>
@@ -626,6 +812,7 @@ function ChatMarkdown({
   className = "text-sm leading-relaxed",
   style,
   onImageExpand,
+  markers,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -636,24 +823,43 @@ function ChatMarkdown({
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  const threadMarkerRemarkPlugin = useMemo(
+    () =>
+      markers && markers.length > 0 ? createThreadMarkerRemarkPlugin({ text, markers }) : null,
+    [markers, text],
+  );
+  const remarkPlugins = useMemo<MarkdownRemarkPlugins>(
+    () =>
+      threadMarkerRemarkPlugin
+        ? [...MARKDOWN_REMARK_PLUGINS, threadMarkerRemarkPlugin]
+        : MARKDOWN_REMARK_PLUGINS,
+    [threadMarkerRemarkPlugin],
+  );
   const markdownUrlTransform = useCallback((href: string) => {
     const restoredHref = restoreLiteralDollarPlaceholders(href);
     return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
   }, []);
   const markdownComponents = useMemo<Components>(
     () => ({
-      a({ node: _node, href, children, className, ...props }) {
+      a({ node: _node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
-        const targetPath = resolveMarkdownFileLinkTarget(restoredHref, cwd);
+        const isExternalHttp = isExternalHttpHref(restoredHref);
+        const targetPath = isExternalHttp ? null : resolveMarkdownFileLinkTarget(restoredHref, cwd);
         if (!targetPath) {
           return (
             <a
               {...props}
-              className={className}
               href={restoredHref}
               target="_blank"
               rel="noopener noreferrer"
+              className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
             >
+              {isExternalHttp ? (
+                <LinkChipIcon
+                  url={restoredHref}
+                  className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME}
+                />
+              ) : null}
               {children}
             </a>
           );
@@ -662,7 +868,6 @@ function ChatMarkdown({
         return (
           <a
             {...props}
-            className={cn("chat-markdown__file-link", className)}
             href={restoredHref}
             onClick={(event) => {
               event.preventDefault();
@@ -675,11 +880,6 @@ function ChatMarkdown({
               }
             }}
           >
-            <FileEntryIcon
-              pathValue={targetPath}
-              kind="file"
-              className="chat-markdown__file-link-icon"
-            />
             {children}
           </a>
         );
@@ -729,7 +929,7 @@ function ChatMarkdown({
   return (
     <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
       <ReactMarkdown
-        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        remarkPlugins={remarkPlugins}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}

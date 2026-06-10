@@ -63,6 +63,7 @@ import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
+import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 
 /**
@@ -750,6 +751,9 @@ export const ChatHeader = memo(function ChatHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+        {!isDisposableThread && !hideHandoffControls && !environment ? (
+          <ProviderUsageMenuControl provider={activeProvider} />
+        ) : null}
         {!isDisposableThread && !hideHandoffControls ? (
           <Menu modal={false}>
             <Tooltip>

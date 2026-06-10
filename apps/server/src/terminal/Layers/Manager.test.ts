@@ -17,7 +17,7 @@ import {
   type PtyProcess,
   type PtySpawnInput,
 } from "../Services/PTY";
-import { TerminalManagerRuntime } from "./Manager";
+import { TerminalManagerRuntime, type TerminalSubprocessActivity } from "./Manager";
 import { Effect, Encoding } from "effect";
 
 class FakePtyProcess implements PtyProcess {
@@ -191,7 +191,7 @@ describe("TerminalManager", () => {
     historyLineLimit = 5,
     options: {
       shellResolver?: () => string;
-      subprocessChecker?: (terminalPid: number) => Promise<boolean>;
+      subprocessChecker?: (terminalPid: number) => Promise<boolean | TerminalSubprocessActivity>;
       subprocessPollIntervalMs?: number;
       processKillGraceMs?: number;
       maxRetainedInactiveSessions?: number;
@@ -420,6 +420,36 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("drains output into history without emitting output events when streamOutput is false", async () => {
+    const { manager, ptyAdapter, logsDir } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    await manager.open(openInput({ streamOutput: false }));
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("dev server listening\n");
+    // History is still drained and persisted even though nothing is broadcast.
+    await waitFor(() => fs.existsSync(historyLogPath(logsDir)));
+    await waitFor(() =>
+      fs.readFileSync(historyLogPath(logsDir), "utf8").includes("dev server listening"),
+    );
+
+    // No live output event ever reaches the WebSocket fanout for a headless session.
+    expect(events.some((event) => event.type === "output")).toBe(false);
+
+    // Re-opening with streamOutput:true flips the session back to live mode (e.g. a
+    // log viewer attaching later); omitting the flag would preserve headless mode.
+    await manager.open(openInput({ streamOutput: true }));
+    process.emitData("after attach\n");
+    await waitFor(() => events.some((event) => event.type === "output"));
+
+    manager.dispose();
+  });
+
   it("resumes ack-paused reads when a renderer reattaches", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(openInput());
@@ -546,6 +576,137 @@ describe("TerminalManager", () => {
     await waitFor(
       () =>
         events.some((event) => event.type === "activity" && event.hasRunningSubprocess === false),
+      1_200,
+    );
+
+    manager.dispose();
+  });
+
+  it("does not brand generic terminals from provider descendants", async () => {
+    const { manager } = makeManager(5, {
+      subprocessChecker: async () => ({
+        cliKind: "codex",
+        hasNonProviderSubprocess: true,
+        hasProviderDescendant: true,
+        hasRunningSubprocess: true,
+      }),
+      subprocessPollIntervalMs: 20,
+    });
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.hasRunningSubprocess === true &&
+            event.cliKind === null,
+        ),
+      1_200,
+    );
+
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "codex")).toBe(
+      false,
+    );
+    manager.dispose();
+  });
+
+  it("does not brand generic terminals from provider-looking output", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("Claude Code v1.2.3 is available in this dev-server log\n");
+    await waitFor(() => events.some((event) => event.type === "output"));
+
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "claude")).toBe(
+      false,
+    );
+    manager.dispose();
+  });
+
+  it("clears provider identity when a generic command is submitted", async () => {
+    const { manager } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    await manager.write({ threadId: "thread-1", data: "codex\r" });
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "codex")).toBe(
+      true,
+    );
+
+    await manager.write({ threadId: "thread-1", data: "bun run dev\r" });
+    expect(events.at(-1)).toMatchObject({
+      type: "activity",
+      cliKind: null,
+    });
+    manager.dispose();
+  });
+
+  it("clears unmanaged provider identity as soon as an observed provider process disappears", async () => {
+    let subprocessActivity: TerminalSubprocessActivity = {
+      cliKind: null,
+      hasNonProviderSubprocess: false,
+      hasProviderDescendant: false,
+      hasRunningSubprocess: false,
+    };
+    let providerDescendantPolls = 0;
+    const { manager } = makeManager(5, {
+      subprocessChecker: async () => {
+        if (subprocessActivity.hasProviderDescendant) {
+          providerDescendantPolls += 1;
+        }
+        return subprocessActivity;
+      },
+      subprocessPollIntervalMs: 20,
+    });
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    await manager.write({ threadId: "thread-1", data: "codex\r" });
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "codex")).toBe(
+      true,
+    );
+
+    subprocessActivity = {
+      cliKind: "codex",
+      hasNonProviderSubprocess: false,
+      hasProviderDescendant: true,
+      hasRunningSubprocess: true,
+    };
+    await waitFor(() => providerDescendantPolls > 0, 1_200);
+
+    subprocessActivity = {
+      cliKind: null,
+      hasNonProviderSubprocess: false,
+      hasProviderDescendant: false,
+      hasRunningSubprocess: false,
+    };
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.cliKind === null &&
+            event.hasRunningSubprocess === false,
+        ),
       1_200,
     );
 

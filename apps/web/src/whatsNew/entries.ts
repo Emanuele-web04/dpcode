@@ -22,6 +22,114 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.7",
+    date: "Jun 10",
+    features: [
+      {
+        id: "claude-fable-5",
+        title: "Claude Fable 5 available to Claude and Cursor",
+        description:
+          "Claude Fable 5 now appears across the Claude and Cursor model paths, so you can pick the new model without hand-editing provider settings.",
+        details:
+          "The shared model contract, Cursor variant list, keybinding metadata, provider discovery invalidation, and model-picker coverage were updated so Claude and Cursor stay in sync when new supported models land.",
+      },
+      {
+        id: "cursor-acp-discovery",
+        title: "Cursor model discovery is smarter",
+        description:
+          "Cursor-backed sessions now discover ACP model support more reliably, refresh stale model lists, and recover better when the provider reports partial or invalid state.",
+        details:
+          "Cursor ACP support now has stronger parsing, refresh, health, and adapter handling, with tests for discovery fallbacks, stale cache invalidation, and provider health behavior.",
+      },
+      {
+        id: "provider-usage-panels",
+        title: "Provider usage is visible where you work",
+        description:
+          "Usage limits and pace now show up in the chat environment, settings, and compact controls for Codex, Claude, Cursor, and Gemini.",
+        details:
+          "Synara now reads provider credentials and usage data through shared server parsers, normalizes snapshots, stores cached values in SQLite, and renders reusable usage rows, progress tracks, line lists, and settings panels in the web app.",
+      },
+      {
+        id: "composer-picker-polish",
+        title: "Composer controls are easier to scan",
+        description:
+          "Model and options pickers are split more cleanly, empty threads keep the focused picker layout, and stacked composer panels have steadier sizing.",
+        details:
+          "The composer stack now uses shared panel content and sizing helpers, refreshed trait-picker behavior, tighter queued/live-change headers, and extra browser/unit coverage for compact controls and panel styles.",
+      },
+      {
+        id: "windows-titlebar-and-packaging",
+        title: "Desktop chrome and installers got sturdier",
+        description:
+          "Windows desktop builds now use a more reliable custom titlebar path, and Linux download metadata matches the current AppImage asset naming.",
+        details:
+          "The desktop app gained centralized Windows caption controls, top-bar gutter handling, preload IPC support, font-family cleanup, and backend Node option tests, while the marketing download page now points at the `-x64` AppImage naming used by current releases.",
+      },
+      {
+        id: "stream-recovery-and-memory",
+        title: "Long-running sessions recover under pressure",
+        description:
+          "Backend memory diagnostics, WebSocket backpressure handling, and live stream recovery were tightened so heavy sessions stay predictable.",
+        details:
+          "This release adds memory diagnostics, stream backpressure guards, buffered provider-runtime ingestion coverage, and Codex app-server recovery fixes to keep partial streams and reconnects from leaving the UI stale.",
+      },
+      {
+        id: "message-and-sidebar-fixes",
+        title: "Small UI fixes landed across chat and navigation",
+        description:
+          "Plugin mention icons stay correct after sending, sidebars and search palettes have sharper state, and chat/task rows picked up focused polish.",
+        details:
+          "Mention-chip icon logic, composer mention parsing, sidebar route metadata, search palette tests, active task cards, right-dock layout, root route chrome, and settings navigation all received focused fixes.",
+      },
+    ],
+  },
+  {
+    version: "0.1.6",
+    date: "Jun 9",
+    features: [
+      {
+        id: "thread-markers",
+        title: "Transcript markers make long chats easier to navigate",
+        description:
+          "You can now mark important transcript moments, jump back to them, and manage them from the Environment panel without losing your place in busy threads.",
+        details:
+          "Markers now round-trip through orchestration events, projection storage, migrations, shared validation helpers, transcript selection actions, highlighted markdown spans, marker-aware scrolling, and focused browser/unit coverage.",
+      },
+      {
+        id: "link-favicons",
+        title: "Links show real site identity",
+        description:
+          "AI response links, source lists, composer chips, and sent user bubbles now share the same link parsing path with website favicons instead of generic globe icons.",
+        details:
+          "Synara now caches site favicons server-side, serves authenticated favicon image URLs, recognizes bare domains in composer text, and keeps markdown link text aligned with the same medium-weight chip styling used while composing.",
+      },
+      {
+        id: "local-server-environment",
+        title: "Local dev servers are easier to spot",
+        description:
+          "The Environment panel can now show local servers tied to the current project, with clearer browser/terminal identity and controls for tracked project runs.",
+        details:
+          "The server now monitors listening processes with address-family metadata, tracks project-run ownership, syncs local server state over WebSocket/RPC contracts, and adds sidebar/project-run affordances for starting, viewing, and stopping dev servers.",
+      },
+      {
+        id: "transcript-scroll-reliability",
+        title: "Transcript scrolling is calmer",
+        description:
+          "Collapsed work sections no longer drag the transcript tail, marker navigation is more predictable, and thread rendering does less surprising work while sessions update.",
+        details:
+          "The timeline path now separates marker scroll behavior from live-output sticking, avoids retriggering tail scrolls for collapsed work disclosure changes, and has extra coverage around marker selection, rendering, and scrolling.",
+      },
+      {
+        id: "orchestration-and-keybindings",
+        title: "Small orchestration and shortcut fixes landed too",
+        description:
+          "Thread orchestration, terminal identity, recent view switching, retired-model shortcuts, and local-server cleanup picked up focused reliability fixes.",
+        details:
+          "This release tightens provider/runtime event projection, terminal visual identity, local-server process cleanup, recent-view key handling, and retired model picker shortcuts, with new tests for the affected contracts and stores.",
+      },
+    ],
+  },
+  {
     version: "0.1.5",
     date: "Jun 8",
     features: [

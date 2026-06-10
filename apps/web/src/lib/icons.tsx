@@ -57,6 +57,7 @@ import {
   IconPaperclip,
   IconPlayerPlay,
   IconPlayerStop,
+  IconPlayerStopFilled,
   IconPlus,
   IconRefresh,
   IconRocket,
@@ -203,6 +204,7 @@ export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
 export const StopIcon = adaptIcon(IconPlayerStop);
+export const StopFilledIcon = adaptIcon(IconPlayerStopFilled);
 export const SquarePenIcon = adaptIcon(IconEdit);
 export const SquareSplitHorizontal: LucideIcon = (props) => (
   <PiSquareSplitHorizontal className={props.className} style={props.style} />

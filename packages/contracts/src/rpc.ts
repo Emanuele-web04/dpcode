@@ -72,14 +72,22 @@ import {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import {
+  ProjectDevServerEvent,
+  ProjectDiscoverScriptsInput,
+  ProjectDiscoverScriptsResult,
+  ProjectListDevServersResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRunDevServerInput,
+  ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
+  ProjectStopDevServerInput,
+  ProjectStopDevServerResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -92,13 +100,18 @@ import {
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
+  ServerListProviderUsageInput,
+  ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
+  ServerStopLocalServerInput,
+  ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
   ServerUpsertKeybindingResult,
@@ -231,6 +244,12 @@ export const WsProjectsListDirectoriesRpc = Rpc.make(WS_METHODS.projectsListDire
   error: WsRpcError,
 });
 
+export const WsProjectsDiscoverScriptsRpc = Rpc.make(WS_METHODS.projectsDiscoverScripts, {
+  payload: ProjectDiscoverScriptsInput,
+  success: ProjectDiscoverScriptsResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
   success: ProjectSearchEntriesResult,
@@ -254,6 +273,34 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   success: ProjectWriteFileResult,
   error: WsRpcError,
 });
+
+export const WsProjectsRunDevServerRpc = Rpc.make(WS_METHODS.projectsRunDevServer, {
+  payload: ProjectRunDevServerInput,
+  success: ProjectRunDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsStopDevServerRpc = Rpc.make(WS_METHODS.projectsStopDevServer, {
+  payload: ProjectStopDevServerInput,
+  success: ProjectStopDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsListDevServersRpc = Rpc.make(WS_METHODS.projectsListDevServers, {
+  payload: Schema.Struct({}),
+  success: ProjectListDevServersResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
+  WS_METHODS.subscribeProjectDevServerEvents,
+  {
+    payload: Schema.Struct({}),
+    success: ProjectDevServerEvent,
+    error: WsRpcError,
+    stream: true,
+  },
+);
 
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
@@ -491,6 +538,18 @@ export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees,
   error: WsRpcError,
 });
 
+export const WsServerListLocalServersRpc = Rpc.make(WS_METHODS.serverListLocalServers, {
+  payload: Schema.Struct({}),
+  success: ServerListLocalServersResult,
+  error: WsRpcError,
+});
+
+export const WsServerStopLocalServerRpc = Rpc.make(WS_METHODS.serverStopLocalServer, {
+  payload: ServerStopLocalServerInput,
+  success: ServerStopLocalServerResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
   WS_METHODS.serverGetProviderUsageSnapshot,
   {
@@ -499,6 +558,12 @@ export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
     error: WsRpcError,
   },
 );
+
+export const WsServerListProviderUsageRpc = Rpc.make(WS_METHODS.serverListProviderUsage, {
+  payload: ServerListProviderUsageInput,
+  success: ServerListProviderUsageResult,
+  error: WsRpcError,
+});
 
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
@@ -620,11 +685,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
+  WsProjectsDiscoverScriptsRpc,
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsRunDevServerRpc,
+  WsProjectsStopDevServerRpc,
+  WsProjectsListDevServersRpc,
+  WsSubscribeProjectDevServerEventsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
   WsGitGithubRepositoryRpc,
@@ -664,7 +734,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
   WsServerListWorktreesRpc,
+  WsServerListLocalServersRpc,
+  WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
+  WsServerListProviderUsageRpc,
   WsServerGetDiagnosticsRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,

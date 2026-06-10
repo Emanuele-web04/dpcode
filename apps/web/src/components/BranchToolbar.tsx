@@ -477,6 +477,7 @@ export default function BranchToolbar({
                     isLoading={usageSummary.isLoading}
                     learnMoreHref={usageSummary.learnMoreHref}
                     showTitle={false}
+                    showLearnMore={true}
                     className="px-2 pb-1 pt-1"
                   />
                 </CollapsiblePanel>

@@ -7,6 +7,7 @@ import {
   type MessageId,
   type ProviderMentionReference,
   ThreadId,
+  type ThreadMarker,
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
@@ -28,6 +29,7 @@ import {
 import { deriveTimelineEntries, isFileChangeWorkLogEntry } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
+import { InlineLinkChip } from "../InlineLinkChip";
 import {
   BotIcon,
   CheckIcon,
@@ -96,7 +98,7 @@ import {
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
@@ -138,6 +140,13 @@ const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
 // How long a jumped-to message keeps its highlight tint before fading back out.
 const JUMP_HIGHLIGHT_DURATION_MS = 1200;
+const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
+const MARKER_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
+// The deep-link "active" ring is applied imperatively to the rendered marker spans so jumping
+// never re-parses a message's markdown tree (the className is purely a CSS box-shadow).
+const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
+const EMPTY_MESSAGE_MARKERS: readonly ThreadMarker[] = [];
+const EMPTY_THREAD_MARKERS_BY_MESSAGE_ID = new Map<MessageId, readonly ThreadMarker[]>();
 
 /**
  * Imperative handle the transcript exposes so the Environment panel's pinned-message
@@ -145,6 +154,7 @@ const JUMP_HIGHLIGHT_DURATION_MS = 1200;
  */
 export interface MessagesTimelineController {
   scrollToMessage: (messageId: MessageId) => void;
+  scrollToMarker: (marker: ThreadMarker) => void;
 }
 
 const AgentTaskIcon: LucideIcon = (props) => (
@@ -191,6 +201,38 @@ function basename(value: string): string {
   return slash >= 0 ? value.slice(slash + 1) : value;
 }
 
+function cssAttributeSelectorValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function getMonotonicTimeMs(): number {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
+}
+
+// A marker can split into several spans when its range crosses markdown nodes, so collect every
+// rendered span for the marker (used both to scroll into view and to decorate the active ring).
+function collectThreadMarkerElements(
+  root: ParentNode | null,
+  marker: Pick<ThreadMarker, "id" | "messageId">,
+): HTMLElement[] {
+  if (!root) {
+    return [];
+  }
+  const messageId = cssAttributeSelectorValue(marker.messageId);
+  const markerId = cssAttributeSelectorValue(marker.id);
+  const selector = `[data-assistant-message-id="${messageId}"] [data-thread-marker-id="${markerId}"]`;
+  return Array.from(root.querySelectorAll<HTMLElement>(selector));
+}
+
+function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLElement | null {
+  for (const element of elements) {
+    if (element.getClientRects().length > 0) {
+      return element;
+    }
+  }
+  return null;
+}
+
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
@@ -205,6 +247,8 @@ interface MessagesTimelineProps {
   pinnedMessageIds?: ReadonlySet<MessageId>;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
+  /** Text markers for assistant messages in the active thread. */
+  threadMarkers?: readonly ThreadMarker[];
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -254,6 +298,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   controllerRef,
   pinnedMessageIds,
   onTogglePinMessage,
+  threadMarkers = [],
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -351,6 +396,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     useState<MessageId | null>(null);
   // Transient highlight applied to a message jumped-to from the pinned-message checklist.
   const [highlightedMessageId, setHighlightedMessageId] = useState<MessageId | null>(null);
+  // Index markers once per update so each assistant row avoids a full marker scan.
+  const threadMarkersByMessageId = useMemo<ReadonlyMap<MessageId, readonly ThreadMarker[]>>(() => {
+    if (threadMarkers.length === 0) {
+      return EMPTY_THREAD_MARKERS_BY_MESSAGE_ID;
+    }
+    const byMessageId = new Map<MessageId, ThreadMarker[]>();
+    for (const marker of threadMarkers) {
+      const messageMarkers = byMessageId.get(marker.messageId);
+      if (messageMarkers) {
+        messageMarkers.push(marker);
+      } else {
+        byMessageId.set(marker.messageId, [marker]);
+      }
+    }
+    return byMessageId;
+  }, [threadMarkers]);
   const timelineExtraData = useMemo(
     () => ({
       editingUserMessageId,
@@ -362,6 +423,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       highlightedMessageId,
       pinnedMessageIds,
       submittingEditedUserMessageId,
+      threadMarkersByMessageId,
     }),
     [
       editingUserMessageId,
@@ -373,10 +435,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       highlightedMessageId,
       pinnedMessageIds,
       submittingEditedUserMessageId,
+      threadMarkersByMessageId,
     ],
   );
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
+  const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const bottomSpacerHeightPx = Math.max(bottomContentInsetPx ?? 0, MIN_BOTTOM_CONTENT_INSET_PX);
   const listFooter = useMemo(
     () => <div aria-hidden="true" style={{ height: bottomSpacerHeightPx }} />,
@@ -412,39 +476,110 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     rowsRef.current = rows;
   }, [rows]);
   const jumpHighlightTimeoutRef = useRef<number | null>(null);
+  const markerFineScrollFrameRef = useRef<number | null>(null);
+  // Marker spans currently carrying the deep-link "active" ring, tracked so the decoration can be
+  // toggled imperatively (no markdown re-parse) and reliably cleared on the next jump or teardown.
+  const decoratedMarkerElementsRef = useRef<HTMLElement[]>([]);
+  const clearActiveMarkerDecoration = useCallback(() => {
+    for (const element of decoratedMarkerElementsRef.current) {
+      element.classList.remove(ACTIVE_MARKER_CLASS_NAME);
+    }
+    decoratedMarkerElementsRef.current = [];
+  }, []);
+  const applyActiveMarkerDecoration = useCallback(
+    (elements: readonly HTMLElement[]) => {
+      clearActiveMarkerDecoration();
+      for (const element of elements) {
+        element.classList.add(ACTIVE_MARKER_CLASS_NAME);
+      }
+      decoratedMarkerElementsRef.current = [...elements];
+    },
+    [clearActiveMarkerDecoration],
+  );
   useEffect(
     () => () => {
       if (jumpHighlightTimeoutRef.current !== null) {
         window.clearTimeout(jumpHighlightTimeoutRef.current);
       }
+      if (markerFineScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(markerFineScrollFrameRef.current);
+      }
+      clearActiveMarkerDecoration();
     },
-    [],
+    [clearActiveMarkerDecoration],
   );
   useEffect(() => {
     if (!controllerRef) {
       return;
     }
-    const controller: MessagesTimelineController = {
-      scrollToMessage: (messageId) => {
-        const index = rowsRef.current.findIndex(
-          (row) => row.kind === "message" && row.message.id === messageId,
-        );
-        if (index < 0) {
+    const scrollToMessage = (messageId: MessageId) => {
+      const index = rowsRef.current.findIndex(
+        (row) => row.kind === "message" && row.message.id === messageId,
+      );
+      if (index < 0) {
+        return false;
+      }
+      void resolvedListRef.current?.scrollToIndex({
+        index,
+        animated: true,
+        viewPosition: 0.2,
+      });
+      return true;
+    };
+    const clearJumpHighlightAfterDelay = () => {
+      if (jumpHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(jumpHighlightTimeoutRef.current);
+      }
+      jumpHighlightTimeoutRef.current = window.setTimeout(() => {
+        setHighlightedMessageId(null);
+        clearActiveMarkerDecoration();
+        jumpHighlightTimeoutRef.current = null;
+      }, JUMP_HIGHLIGHT_DURATION_MS);
+    };
+    const cancelPendingMarkerFineScroll = () => {
+      if (markerFineScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(markerFineScrollFrameRef.current);
+        markerFineScrollFrameRef.current = null;
+      }
+    };
+    const scheduleMarkerFineScroll = (marker: ThreadMarker) => {
+      cancelPendingMarkerFineScroll();
+      const deadlineMs = getMonotonicTimeMs() + MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS;
+      let attempts = 0;
+      const tick = () => {
+        markerFineScrollFrameRef.current = null;
+        const elements = collectThreadMarkerElements(timelineRootRef.current, marker);
+        const visibleElement = findVisibleThreadMarkerElement(elements);
+        if (visibleElement) {
+          applyActiveMarkerDecoration(elements);
+          visibleElement.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
           return;
         }
-        void resolvedListRef.current?.scrollToIndex({
-          index,
-          animated: true,
-          viewPosition: 0.2,
-        });
-        setHighlightedMessageId(messageId);
-        if (jumpHighlightTimeoutRef.current !== null) {
-          window.clearTimeout(jumpHighlightTimeoutRef.current);
+        attempts += 1;
+        if (getMonotonicTimeMs() <= deadlineMs && attempts < MARKER_FINE_SCROLL_MAX_RETRY_FRAMES) {
+          markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
         }
-        jumpHighlightTimeoutRef.current = window.setTimeout(() => {
-          setHighlightedMessageId(null);
-          jumpHighlightTimeoutRef.current = null;
-        }, JUMP_HIGHLIGHT_DURATION_MS);
+      };
+      markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
+    };
+    const controller: MessagesTimelineController = {
+      scrollToMessage: (messageId) => {
+        cancelPendingMarkerFineScroll();
+        clearActiveMarkerDecoration();
+        if (!scrollToMessage(messageId)) {
+          return;
+        }
+        setHighlightedMessageId(messageId);
+        clearJumpHighlightAfterDelay();
+      },
+      scrollToMarker: (marker) => {
+        clearActiveMarkerDecoration();
+        if (!scrollToMessage(marker.messageId)) {
+          return;
+        }
+        setHighlightedMessageId(marker.messageId);
+        clearJumpHighlightAfterDelay();
+        scheduleMarkerFineScroll(marker);
       },
     };
     controllerRef.current = controller;
@@ -453,7 +588,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         controllerRef.current = null;
       }
     };
-  }, [controllerRef, resolvedListRef]);
+  }, [controllerRef, resolvedListRef, applyActiveMarkerDecoration, clearActiveMarkerDecoration]);
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
@@ -830,6 +965,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const messageMarkers =
+            threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const inlineWorkEntries = row.inlineWorkEntries ?? [];
           const inlineToolEntries = inlineWorkEntries.filter((entry) => entry.tone === "tool");
           const inlineStatusEntries = inlineWorkEntries.filter((entry) => entry.tone !== "tool");
@@ -911,13 +1048,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     open={isCollapsedWorkExpanded}
                     onOpenChange={(open) => {
                       setCollapsedWorkExpanded(row.message.id, open);
-                      if (open && isTailContentRow) {
-                        scrollTailExpansionToEnd();
-                      }
                     }}
                   >
                     <CollapsibleTrigger
-                      data-scroll-anchor-ignore={isTailContentRow ? true : undefined}
+                      // ChatView's click anchor preserves this trigger's screen position
+                      // while the disclosure height animates, so opening it should not tail-scroll.
                       // -ml-0.5 optically aligns the leading "W" with the reply
                       // text below: the box is already flush, but the W glyph
                       // carries a left side-bearing that reads as an inset.
@@ -985,6 +1120,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     isStreaming={Boolean(row.message.streaming)}
                     style={chatTypographyStyle}
                     onImageExpand={onImageExpand}
+                    markers={messageMarkers}
                   />
                 </div>
                 {!hasCollapsedWork && visibleRenderableInlineToolEntries.length > 0 && (
@@ -1349,38 +1485,40 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <LegendList<MessagesTimelineRow>
-      ref={resolvedListRef}
-      data={rows}
-      keyExtractor={(row) => row.id}
-      renderItem={({ item }) => renderRowContent(item)}
-      estimatedItemSize={90}
-      // LegendList caches rendered rows, so every local expansion map that changes row content
-      // has to be surfaced through extraData.
-      extraData={timelineExtraData}
-      initialScrollAtEnd
-      maintainScrollAtEnd={followLiveOutput}
-      maintainScrollAtEndThreshold={0.1}
-      maintainVisibleContentPosition
-      onClickCapture={onMessagesClickCapture}
-      onMouseUp={onMessagesMouseUp}
-      onPointerCancel={onMessagesPointerCancel}
-      onPointerDown={onMessagesPointerDown}
-      onPointerUp={onMessagesPointerUp}
-      onScroll={handleListScroll}
-      onTouchEnd={onMessagesTouchEnd}
-      onTouchMove={onMessagesTouchMove}
-      onTouchStart={onMessagesTouchStart}
-      onWheel={onMessagesWheel}
-      data-chat-scroll-container="true"
-      ListFooterComponent={listFooter}
-      className={cn(
-        "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
-        ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-        CHAT_COLUMN_GUTTER_CLASS_NAME,
-      )}
-      {...(listScrollStyle ? { style: listScrollStyle } : {})}
-    />
+    <div ref={timelineRootRef} className="contents" data-messages-timeline-root="true">
+      <LegendList<MessagesTimelineRow>
+        ref={resolvedListRef}
+        data={rows}
+        keyExtractor={(row) => row.id}
+        renderItem={({ item }) => renderRowContent(item)}
+        estimatedItemSize={90}
+        // LegendList caches rendered rows, so every local expansion map that changes row content
+        // has to be surfaced through extraData.
+        extraData={timelineExtraData}
+        initialScrollAtEnd
+        maintainScrollAtEnd={followLiveOutput}
+        maintainScrollAtEndThreshold={0.1}
+        maintainVisibleContentPosition
+        onClickCapture={onMessagesClickCapture}
+        onMouseUp={onMessagesMouseUp}
+        onPointerCancel={onMessagesPointerCancel}
+        onPointerDown={onMessagesPointerDown}
+        onPointerUp={onMessagesPointerUp}
+        onScroll={handleListScroll}
+        onTouchEnd={onMessagesTouchEnd}
+        onTouchMove={onMessagesTouchMove}
+        onTouchStart={onMessagesTouchStart}
+        onWheel={onMessagesWheel}
+        data-chat-scroll-container="true"
+        ListFooterComponent={listFooter}
+        className={cn(
+          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+          CHAT_COLUMN_GUTTER_CLASS_NAME,
+        )}
+        {...(listScrollStyle ? { style: listScrollStyle } : {})}
+      />
+    </div>
   );
 });
 
@@ -1473,7 +1611,7 @@ const UserMessageInlineSkillChip = memo(function UserMessageInlineSkillChip(prop
     <span className={COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME}>
       <CentralIcon
         name={COMPOSER_INLINE_SKILL_CHIP_ICON_NAME}
-        className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME}
+        className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME}
       />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>
         {formatComposerSkillChipLabel(props.skillName)}
@@ -1546,6 +1684,7 @@ function renderUserMessageInlineText(
           key={`${key}:mention`}
           path={segment.path}
           resolvedTheme={resolvedTheme}
+          mentionReferences={mentionReferences}
           {...(segment.kind ? { kind: segment.kind } : {})}
         />,
       ];
@@ -1559,13 +1698,21 @@ function renderUserMessageInlineText(
         />,
       ];
     }
+    if (segment.type === "link") {
+      return [<UserMessageInlineLinkChip key={`${key}:link`} url={segment.url} />];
+    }
     return [];
   });
 }
 
+const UserMessageInlineLinkChip = memo(function UserMessageInlineLinkChip(props: { url: string }) {
+  return <InlineLinkChip url={props.url} interactive />;
+});
+
 const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(props: {
   path: string;
   kind?: "path" | "plugin";
+  mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   resolvedTheme: "light" | "dark";
 }) {
   const label = basenameOfPath(props.path);
@@ -1575,6 +1722,7 @@ const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(
         path={props.path}
         theme={props.resolvedTheme}
         {...(props.kind ? { kind: props.kind } : {})}
+        {...(props.mentionReferences ? { mentionReferences: props.mentionReferences } : {})}
       />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
     </span>
@@ -1990,6 +2138,14 @@ function workEntryPreview(
   return null;
 }
 
+// Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
+// without a `file-read` requestKind, so match their tool name to surface the eye icon
+// instead of the generic tool/wrench fallback.
+function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
+  const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  return name === "read" || name === "readfile" || name === "viewfile";
+}
+
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "command") return TerminalIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
@@ -2005,6 +2161,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
+  if (isFileReadToolEntry(workEntry)) return EyeIcon;
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":
@@ -2023,7 +2180,7 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
 }
 
-// Keep command, agent-task, and file-change rows visually compact so their icon can trail the label.
+// Render command, agent-task, and file-change rows at the tighter compact density.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
   const EntryIcon = workEntryIcon(workEntry);
   return (
@@ -2061,15 +2218,6 @@ function combineWorkEntryDisplayText(heading: string, preview: string | null): s
   return normalizeWorkDisplayText(heading) === normalizeWorkDisplayText(preview)
     ? heading
     : `${heading} ${preview}`;
-}
-
-// Splits compact work labels so the action verb can carry visual emphasis.
-function splitWorkEntryActionText(value: string): { action: string; rest: string } | null {
-  const match = /^(\S+)([\s\S]*)$/.exec(value.trim());
-  if (!match?.[1]) {
-    return null;
-  }
-  return { action: match[1], rest: match[2] ?? "" };
 }
 
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
@@ -2189,18 +2337,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
-  const usesTrailingCompactIcon =
-    EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon;
-  const showIconRight = compact && usesTrailingCompactIcon;
-  const showIconLeft = !compact;
-  const showInlineWebSearchIcon = compact && workEntry.itemType === "web_search";
-  const showInlineGitHubIcon = compact && isGitHubMcpToolCall(workEntry);
-  const showInlineMcpIcon =
-    compact && workEntry.itemType === "mcp_tool_call" && !showInlineGitHubIcon;
+  // Every tool row leads with a single left icon; keep branded glyphs for GitHub/MCP rows.
+  const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
+  const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
+  const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
+  const leftIconKind = isGitHubToolRow ? "github" : isMcpToolRow ? "mcp" : undefined;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = combineWorkEntryDisplayText(heading, preview);
-  const displayTextParts = splitWorkEntryActionText(displayText);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
@@ -2431,16 +2575,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              {showIconLeft && (
-                <span
-                  className={cn(
-                    "flex shrink-0 items-center justify-center text-muted-foreground/40",
-                    compact ? "size-4" : "size-5",
-                  )}
-                >
-                  <EntryIcon className={compact ? "size-2.5" : "size-3"} />
-                </span>
-              )}
+              <span
+                className={cn(
+                  "flex shrink-0 items-center justify-center text-muted-foreground/40",
+                  compact ? "size-4" : "size-5",
+                )}
+                data-tool-icon={leftIconKind}
+              >
+                <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+              </span>
               <div className="min-w-0 flex-1 overflow-hidden">
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
@@ -2467,69 +2610,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <p
                     className={cn(
                       compact ? "truncate leading-5" : "truncate leading-6",
-                      "text-muted-foreground/50",
+                      // Match the leading icon's tone so the row reads as one muted unit.
+                      "text-muted-foreground/40",
                     )}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
-                    {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
-                      <span
-                        className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
-                        data-inline-tool-icon={
-                          showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
-                        }
-                      >
-                        {showInlineGitHubIcon ? (
-                          <GitHubIcon
-                            style={{
-                              width: `${rowFontSizePx}px`,
-                              height: `${rowFontSizePx}px`,
-                            }}
-                          />
-                        ) : null}
-                        {showInlineMcpIcon ? (
-                          <McpIcon
-                            style={{
-                              width: `${rowFontSizePx}px`,
-                              height: `${rowFontSizePx}px`,
-                            }}
-                          />
-                        ) : null}
-                        {showInlineWebSearchIcon ? (
-                          <GlobeIcon
-                            style={{
-                              width: `${rowFontSizePx}px`,
-                              height: `${rowFontSizePx}px`,
-                            }}
-                          />
-                        ) : null}
-                      </span>
-                    ) : null}
-                    <span className="text-muted-foreground/48" data-work-entry-display-text="true">
-                      {displayTextParts ? (
-                        <>
-                          <span
-                            className="font-medium text-muted-foreground/72"
-                            data-work-entry-action-word="true"
-                          >
-                            {displayTextParts.action}
-                          </span>
-                          {displayTextParts.rest}
-                        </>
-                      ) : (
-                        displayText
-                      )}
-                    </span>
+                    <span data-work-entry-display-text="true">{displayText}</span>
                   </p>
                 )}
               </div>
-              {showIconRight && (
-                <span
-                  className="flex shrink-0 items-center justify-center text-muted-foreground/40"
-                  style={{ width: rowFontSizePx, height: rowFontSizePx }}
-                >
-                  <EntryIcon style={{ width: rowFontSizePx, height: rowFontSizePx }} />
-                </span>
-              )}
             </>
           );
           const rowContent = (
