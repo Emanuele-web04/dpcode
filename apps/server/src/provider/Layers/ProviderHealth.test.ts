@@ -24,6 +24,7 @@ import {
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   parseDevinAuthStatusFromOutput,
+  providerStatusesEqual,
   readCodexConfigModelProvider,
   stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
@@ -100,25 +101,32 @@ function withTempCodexHome(configContent?: string) {
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        const originalCodexHome = process.env.CODEX_HOME;
-        const originalDpCodeHome = process.env.DPCODE_HOME;
+        // Override every runtime-home var the overlay resolver consults (SYNARA_HOME wins over
+        // DPCODE_HOME/T3CODE_HOME) plus CODEX_HOME, so an ambient SYNARA_HOME can't shadow the
+        // temp dir and skew the resolved CODEX_HOME during this test.
+        const overrides: Record<string, string> = {
+          CODEX_HOME: tmpDir,
+          SYNARA_HOME: runtimeDir,
+          DPCODE_HOME: runtimeDir,
+          T3CODE_HOME: runtimeDir,
+        };
+        const restore: Record<string, string | undefined> = {};
+        for (const [key, value] of Object.entries(overrides)) {
+          restore[key] = process.env[key];
+          process.env[key] = value;
+        }
         const originalPortkeyApiKey = process.env.PORTKEY_API_KEY;
-        process.env.CODEX_HOME = tmpDir;
-        process.env.DPCODE_HOME = runtimeDir;
         process.env.PORTKEY_API_KEY ??= "test-portkey-key";
-        return { originalCodexHome, originalDpCodeHome, originalPortkeyApiKey };
+        return { restore, originalPortkeyApiKey };
       }),
-      ({ originalCodexHome, originalDpCodeHome, originalPortkeyApiKey }) =>
+      ({ restore, originalPortkeyApiKey }) =>
         Effect.sync(() => {
-          if (originalCodexHome !== undefined) {
-            process.env.CODEX_HOME = originalCodexHome;
-          } else {
-            delete process.env.CODEX_HOME;
-          }
-          if (originalDpCodeHome !== undefined) {
-            process.env.DPCODE_HOME = originalDpCodeHome;
-          } else {
-            delete process.env.DPCODE_HOME;
+          for (const [key, value] of Object.entries(restore)) {
+            if (value !== undefined) {
+              process.env[key] = value;
+            } else {
+              delete process.env[key];
+            }
           }
           if (originalPortkeyApiKey !== undefined) {
             process.env.PORTKEY_API_KEY = originalPortkeyApiKey;
@@ -252,6 +260,66 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           [authTimeoutWarning],
         ),
         [authTimeoutWarning],
+      );
+    });
+  });
+
+  describe("providerStatusesEqual", () => {
+    const readyCursor = {
+      provider: "cursor",
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: "2026.06.04-8f81907",
+      checkedAt: "2026-06-04T17:00:00.000Z",
+      message:
+        "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
+      versionAdvisory: {
+        status: "current",
+        currentVersion: "2026.06.04-8f81907",
+        latestVersion: "2026.06.04-8f81907",
+        updateCommand: null,
+        canUpdate: true,
+        checkedAt: "2026-06-04T17:00:00.000Z",
+        message: null,
+      },
+    } satisfies ServerProviderStatus;
+
+    it("ignores top-level and version-advisory checkedAt churn", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [readyCursor],
+          [
+            {
+              ...readyCursor,
+              checkedAt: "2026-06-04T17:01:00.000Z",
+              versionAdvisory: {
+                ...readyCursor.versionAdvisory,
+                checkedAt: "2026-06-04T17:01:00.000Z",
+              },
+            },
+          ],
+        ),
+        true,
+      );
+    });
+
+    it("detects meaningful version-advisory changes", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [readyCursor],
+          [
+            {
+              ...readyCursor,
+              versionAdvisory: {
+                ...readyCursor.versionAdvisory,
+                status: "behind_latest",
+                latestVersion: "2026.06.05-a1b2c3d",
+              },
+            },
+          ],
+        ),
+        false,
       );
     });
   });

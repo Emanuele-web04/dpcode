@@ -678,6 +678,35 @@ export interface CodexAppServerManagerEvents {
   event: [event: ProviderEvent];
 }
 
+const CODEX_DISCOVERY_CACHE_MAX_ENTRIES = 128;
+
+function getRecentCacheEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
+  const value = cache.get(key);
+  if (value === undefined) {
+    return undefined;
+  }
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function setRecentCacheEntry<K, V>(
+  cache: Map<K, V>,
+  key: K,
+  value: V,
+  maxEntries = CODEX_DISCOVERY_CACHE_MAX_ENTRIES,
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) {
+      return;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -688,9 +717,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly modelCache = new Map<string, ProviderListModelsResult>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
-  constructor(services?: ServiceMap.ServiceMap<never>) {
+  private readonly synaraSkillsDir: string | undefined;
+  constructor(
+    services?: ServiceMap.ServiceMap<never>,
+    options?: { readonly synaraSkillsDir?: string },
+  ) {
     super();
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
+    this.synaraSkillsDir = options?.synaraSkillsDir;
+  }
+
+  // Registers `~/.synara/skills` as a codex skill root so portable skills are
+  // first-class: skills/list returns them and turn/start `skill` items inject
+  // their instructions. Verified live: skill items with paths outside known
+  // roots are silently ignored by codex app-server, so this call is required.
+  private async registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void> {
+    if (!this.synaraSkillsDir) {
+      return;
+    }
+    try {
+      await this.sendRequest(context, "skills/extraRoots/set", {
+        extraRoots: [this.synaraSkillsDir],
+      });
+    } catch (error) {
+      // Older codex builds (< extra-roots support) keep working; Synara-only
+      // skills simply stay invisible to codex on those versions.
+      console.log("codex skills/extraRoots/set unavailable", error);
+    }
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
@@ -762,6 +815,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
 
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
         console.log("codex model/list response", modelListResponse);
@@ -1378,6 +1432,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
         context.account = readCodexAccountSnapshot(accountReadResponse);
@@ -1677,7 +1732,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: input.threadId?.trim() || null,
     });
     if (!input.forceReload) {
-      const cached = this.skillsCache.get(cacheKey);
+      const cached = getRecentCacheEntry(this.skillsCache, cacheKey);
       if (cached) {
         return {
           ...cached,
@@ -1708,7 +1763,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.skillsCache.set(cacheKey, result);
+    setRecentCacheEntry(this.skillsCache, cacheKey, result);
     return result;
   }
 
@@ -1720,7 +1775,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       forceRemoteSync: input.forceRemoteSync === true,
     });
     if (!input.forceReload) {
-      const cached = this.pluginsCache.get(cacheKey);
+      const cached = getRecentCacheEntry(this.pluginsCache, cacheKey);
       if (cached) {
         return {
           ...cached,
@@ -1739,7 +1794,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.pluginsCache.set(cacheKey, result);
+    setRecentCacheEntry(this.pluginsCache, cacheKey, result);
     return result;
   }
 
@@ -1750,7 +1805,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       marketplacePath,
       pluginName,
     });
-    const cached = this.pluginDetailCache.get(cacheKey);
+    const cached = getRecentCacheEntry(this.pluginDetailCache, cacheKey);
     if (cached) {
       return {
         ...cached,
@@ -1768,13 +1823,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.pluginDetailCache.set(cacheKey, result);
+    setRecentCacheEntry(this.pluginDetailCache, cacheKey, result);
     return result;
   }
 
   async listModels(threadId?: string): Promise<ProviderListModelsResult> {
     const cacheKey = threadId?.trim() || "__default__";
-    const cached = this.modelCache.get(cacheKey);
+    const cached = getRecentCacheEntry(this.modelCache, cacheKey);
     if (cached) {
       return {
         ...cached,
@@ -1794,7 +1849,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.modelCache.set(cacheKey, result);
+    setRecentCacheEntry(this.modelCache, cacheKey, result);
     return result;
   }
 
@@ -1968,6 +2023,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
         context.account = readCodexAccountSnapshot(accountReadResponse);

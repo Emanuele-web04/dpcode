@@ -23,6 +23,10 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
   ThreadId,
+  ThreadMarkerId,
+  type ThreadMarker,
+  type ThreadMarkerColor,
+  type ThreadMarkerStyle,
   type TurnId,
   type EditorId,
   type KeybindingCommand,
@@ -46,7 +50,6 @@ import {
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
 } from "@t3tools/shared/threadEnvironment";
-import { deriveTerminalCommandIdentity } from "@t3tools/shared/terminalThreads";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import {
   useCallback,
@@ -240,6 +243,7 @@ import {
   projectScriptIdFromCommand,
   setupProjectScript,
 } from "~/projectScripts";
+import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -320,7 +324,10 @@ import {
 } from "./chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -330,8 +337,9 @@ import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimelin
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
+import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
+import { TraitsPicker } from "./chat/TraitsPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
   ComposerLocalDirectoryMenu,
@@ -350,6 +358,13 @@ import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionAction
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
+import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
+import {
+  dispatchThreadMarkerAdd,
+  dispatchThreadMarkerDoneSet,
+  dispatchThreadMarkerLabelSet,
+  dispatchThreadMarkerRemove,
+} from "../threadMarkers";
 import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
@@ -379,7 +394,6 @@ import {
 import {
   ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS,
   appendVoiceTranscriptToPrompt,
-  buildComposerMenuSelectionKey,
   describeVoiceRecordingStartError,
   isVoiceAuthExpiredMessage,
   sanitizeVoiceErrorMessage,
@@ -409,7 +423,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
-import { collapseCursorModelVariants } from "../cursorModelVariants";
+import { mergeCursorModelVariantsWithBaseControls } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -436,6 +450,7 @@ const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES 
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_PINNED_MESSAGES: readonly PinnedMessage[] = [];
+const EMPTY_THREAD_MARKERS: readonly ThreadMarker[] = [];
 const EMPTY_PINNED_TEXT: ReadonlyMap<MessageId, string> = new Map();
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
@@ -603,8 +618,6 @@ function buildQueuedComposerPreviewText(input: {
 }
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
-const SCRIPT_TERMINAL_COLS = 120;
-const SCRIPT_TERMINAL_ROWS = 30;
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
 
 function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
@@ -799,6 +812,8 @@ export default function ChatView({
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -1519,13 +1534,14 @@ export default function ChatView({
     () =>
       showExpandedCursorModelVariants
         ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
+        : mergeCursorModelVariantsWithBaseControls(cursorDynamicModelsQuery.data?.models ?? []),
     [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
   );
   const cursorModelDiscoveryEnabled =
     selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen;
   const hasResolvedCursorModelDiscovery =
-    cursorDynamicModelsQuery.data?.source === "cursor.cli" &&
+    (cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
+      cursorDynamicModelsQuery.data?.source === "cursor.acp") &&
     (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
   const cursorModelDiscoveryPending =
     cursorModelDiscoveryEnabled &&
@@ -2300,25 +2316,41 @@ export default function ChatView({
   );
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
+  const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
   const threadNotes = activeThread?.notes ?? "";
   const pinnedMessageIds = useMemo(
     () => new Set(pinnedMessages.map((pin) => pin.messageId)),
     [pinnedMessages],
   );
-  // Resolve the live text of currently-pinned messages so the panel can derive auto-labels
-  // and flag pins whose source message is no longer in the transcript.
-  const pinnedMessageTextById = useMemo(() => {
-    if (pinnedMessageIds.size === 0) {
-      return EMPTY_PINNED_TEXT;
+  const markerMessageIds = useMemo(
+    () => new Set(threadMarkers.map((marker) => marker.messageId)),
+    [threadMarkers],
+  );
+  // Resolve live text for the Environment panel in one transcript pass.
+  const { markerMessageTextById, pinnedMessageTextById } = useMemo(() => {
+    const needsPinnedText = pinnedMessageIds.size > 0;
+    const needsMarkerText = markerMessageIds.size > 0;
+    if (!needsPinnedText && !needsMarkerText) {
+      return {
+        pinnedMessageTextById: EMPTY_PINNED_TEXT,
+        markerMessageTextById: EMPTY_PINNED_TEXT,
+      };
     }
-    const map = new Map<MessageId, string>();
+    const pinnedTextById = new Map<MessageId, string>();
+    const markerTextById = new Map<MessageId, string>();
     for (const message of timelineMessages) {
-      if (pinnedMessageIds.has(message.id)) {
-        map.set(message.id, message.text);
+      if (needsPinnedText && pinnedMessageIds.has(message.id)) {
+        pinnedTextById.set(message.id, message.text);
+      }
+      if (needsMarkerText && markerMessageIds.has(message.id)) {
+        markerTextById.set(message.id, message.text);
       }
     }
-    return map;
-  }, [pinnedMessageIds, timelineMessages]);
+    return {
+      pinnedMessageTextById: needsPinnedText ? pinnedTextById : EMPTY_PINNED_TEXT,
+      markerMessageTextById: needsMarkerText ? markerTextById : EMPTY_PINNED_TEXT,
+    };
+  }, [markerMessageIds, pinnedMessageIds, timelineMessages]);
   const {
     handleTogglePinMessage,
     handleTogglePinnedMessageDone,
@@ -2329,6 +2361,58 @@ export default function ChatView({
   const handleJumpToPinnedMessage = useCallback((messageId: MessageId) => {
     timelineControllerRef.current?.scrollToMessage(messageId);
   }, []);
+  const handleJumpToThreadMarker = useCallback((marker: ThreadMarker) => {
+    timelineControllerRef.current?.scrollToMarker(marker);
+  }, []);
+  const handleRemoveThreadMarker = useCallback(
+    (markerId: ThreadMarkerId) => {
+      if (!activeThreadId) {
+        return;
+      }
+      void dispatchThreadMarkerRemove(activeThreadId, markerId).catch((error) => {
+        console.error("Failed to remove thread marker", error);
+        toastManager.add({
+          type: "error",
+          title: "Could not remove marker.",
+        });
+      });
+    },
+    [activeThreadId],
+  );
+  const handleToggleThreadMarkerDone = useCallback(
+    (markerId: ThreadMarkerId) => {
+      if (!activeThreadId) {
+        return;
+      }
+      const marker = threadMarkers.find((candidate) => candidate.id === markerId);
+      if (!marker) {
+        return;
+      }
+      void dispatchThreadMarkerDoneSet(activeThreadId, markerId, !marker.done).catch((error) => {
+        console.error("Failed to update thread marker", error);
+        toastManager.add({
+          type: "error",
+          title: "Could not update marker.",
+        });
+      });
+    },
+    [activeThreadId, threadMarkers],
+  );
+  const handleRenameThreadMarker = useCallback(
+    (markerId: ThreadMarkerId, label: string | null) => {
+      if (!activeThreadId) {
+        return;
+      }
+      void dispatchThreadMarkerLabelSet(activeThreadId, markerId, label).catch((error) => {
+        console.error("Failed to rename thread marker", error);
+        toastManager.add({
+          type: "error",
+          title: "Could not rename marker.",
+        });
+      });
+    },
+    [activeThreadId],
+  );
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
@@ -2417,10 +2501,6 @@ export default function ChatView({
     composerCommandPicker === null &&
     isMentionTrigger &&
     isLocalFolderMentionQuery(mentionTriggerQuery);
-  const skillTriggerQuery =
-    composerTrigger?.kind === "skill" || composerTrigger?.kind === "slash-command"
-      ? composerTrigger.query
-      : "";
   const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
     mentionTriggerQuery,
@@ -2478,7 +2558,6 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
-      query: skillTriggerQuery,
       enabled:
         (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
         canDiscoverProviderSkills &&
@@ -2686,24 +2765,6 @@ export default function ChatView({
     normalComposerMenuItems,
   ]);
   const composerMenuOpen = Boolean(composerTrigger || composerCommandPicker);
-  const composerMenuSelectionKey = useMemo(
-    () =>
-      buildComposerMenuSelectionKey({
-        menuOpen: composerMenuOpen,
-        picker: composerCommandPicker,
-        triggerKind: effectiveComposerTriggerKind,
-        triggerQuery: effectiveComposerTrigger?.query ?? "",
-        items: composerMenuItems,
-      }),
-    [
-      composerCommandPicker,
-      composerMenuItems,
-      composerMenuOpen,
-      effectiveComposerTrigger?.query,
-      effectiveComposerTriggerKind,
-    ],
-  );
-  const firstComposerMenuItemId = composerMenuItems[0]?.id ?? null;
   const activeComposerMenuItem = useMemo(
     () =>
       composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
@@ -2924,8 +2985,6 @@ export default function ChatView({
     () => shortcutLabelForCommand(keybindings, "chat.split"),
     [keybindings],
   );
-  // The combined picker uses the same configurable keybinding command that the
-  // keydown handler resolves, keeping synced keybindings and tooltip labels aligned.
   const modelPickerShortcutLabel = useMemo(
     () =>
       shortcutLabelForCommand(keybindings, "modelPicker.toggle") ??
@@ -2937,6 +2996,10 @@ export default function ChatView({
         altKey: false,
         modKey: true,
       }),
+    [keybindings],
+  );
+  const traitsPickerShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "traitsPicker.toggle"),
     [keybindings],
   );
   const onToggleDiff = useCallback(() => {
@@ -3571,7 +3634,7 @@ export default function ChatView({
     isTerminalPrimarySurface,
   });
   const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(() => environmentDefaultOpen);
-  useLayoutEffect(() => {
+  useEffect(() => {
     // Terminal threads keep the Environment panel closed by default so the full
     // workspace stays untouched until the user explicitly toggles the overlay.
     // Each normal chat thread starts open; empty/disposable views stay hidden.
@@ -3738,36 +3801,25 @@ export default function ChatView({
       }
       setTerminalFocusRequestId((value) => value + 1);
 
-      const runtimeEnv = projectScriptRuntimeEnv({
-        project: {
-          cwd: activeProject.cwd,
-        },
-        worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
-        ...(options?.env ? { extraEnv: options.env } : {}),
-      });
-      const openTerminalInput: Parameters<typeof api.terminal.open>[0] = {
-        threadId: activeThreadId,
-        terminalId: targetTerminalId,
-        cwd: targetCwd,
-        env: runtimeEnv,
-        cols: SCRIPT_TERMINAL_COLS,
-        rows: SCRIPT_TERMINAL_ROWS,
-      };
-
       try {
-        const terminalCommandIdentity = deriveTerminalCommandIdentity(script.command);
-        await api.terminal.open(openTerminalInput);
-        if (terminalCommandIdentity) {
-          storeSetTerminalMetadata(activeThreadId, targetTerminalId, {
-            cliKind: terminalCommandIdentity.cliKind,
-            label: terminalCommandIdentity.title,
-          });
-        }
-        await api.terminal.write({
+        const { metadata } = await runProjectCommandInTerminal({
+          api,
           threadId: activeThreadId,
           terminalId: targetTerminalId,
-          data: `${script.command}\r`,
+          project: {
+            cwd: activeProject.cwd,
+          },
+          cwd: targetCwd,
+          command: script.command,
+          worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
+          ...(options?.env ? { env: options.env } : {}),
         });
+        if (metadata) {
+          storeSetTerminalMetadata(activeThreadId, targetTerminalId, {
+            cliKind: metadata.cliKind,
+            label: metadata.label,
+          });
+        }
       } catch (error) {
         setThreadError(
           activeThreadId,
@@ -4246,6 +4298,7 @@ export default function ChatView({
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
+    dismissTranscriptSelectionAction,
     onMessagesClickCapture,
     onMessagesMouseUp,
     onMessagesPointerCancel,
@@ -4277,6 +4330,85 @@ export default function ChatView({
     onMessagesTouchStartBase,
     onMessagesWheelBase,
   });
+  const createMarkerFromPendingSelection = useCallback(
+    (style: ThreadMarkerStyle, color: ThreadMarkerColor) => {
+      const pendingSelection = pendingTranscriptSelectionAction;
+      if (!pendingSelection || !activeThreadId) {
+        return;
+      }
+      const messageId = MessageId.makeUnsafe(pendingSelection.selection.assistantMessageId);
+      const message = timelineMessages.find((candidate) => candidate.id === messageId);
+      if (!message) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not find the selected message.",
+        });
+        return;
+      }
+      const range = resolveTranscriptMarkerRange({
+        messageText: message.text,
+        selectedText: pendingSelection.selection.text,
+      });
+      if (!range) {
+        toastManager.add({
+          type: "warning",
+          title: "Select a unique phrase to mark it.",
+          description: "Try including a few more words so Synara can find the exact place.",
+        });
+        return;
+      }
+      dismissTranscriptSelectionAction();
+      window.getSelection()?.removeAllRanges();
+      const sameStyleOverlappingMarkers = threadMarkers.filter(
+        (marker) =>
+          marker.messageId === messageId &&
+          marker.style === style &&
+          marker.startOffset < range.endOffset &&
+          range.startOffset < marker.endOffset,
+      );
+      if (sameStyleOverlappingMarkers.length > 0) {
+        for (const marker of sameStyleOverlappingMarkers) {
+          void dispatchThreadMarkerRemove(activeThreadId, marker.id).catch((error) => {
+            console.error("Failed to remove thread marker", error);
+            toastManager.add({
+              type: "error",
+              title: "Could not remove marker.",
+            });
+          });
+        }
+        return;
+      }
+      void dispatchThreadMarkerAdd({
+        threadId: activeThreadId,
+        markerId: ThreadMarkerId.makeUnsafe(crypto.randomUUID()),
+        messageId,
+        startOffset: range.startOffset,
+        endOffset: range.endOffset,
+        selectedText: message.text.slice(range.startOffset, range.endOffset),
+        style,
+        color,
+      }).catch((error) => {
+        console.error("Failed to create thread marker", error);
+        toastManager.add({
+          type: "error",
+          title: "Could not create marker.",
+        });
+      });
+    },
+    [
+      activeThreadId,
+      dismissTranscriptSelectionAction,
+      pendingTranscriptSelectionAction,
+      threadMarkers,
+      timelineMessages,
+    ],
+  );
+  const createHighlightFromPendingSelection = useCallback(() => {
+    createMarkerFromPendingSelection("highlight", "yellow");
+  }, [createMarkerFromPendingSelection]);
+  const createUnderlineFromPendingSelection = useCallback(() => {
+    createMarkerFromPendingSelection("underline", "blue");
+  }, [createMarkerFromPendingSelection]);
 
   useLayoutEffect(() => {
     if (isInactiveSplitPane) return;
@@ -4349,14 +4481,16 @@ export default function ChatView({
   }, [activeThread?.id]);
 
   useEffect(() => {
-    if (!composerMenuOpen || composerMenuSelectionKey === null) {
+    if (!composerMenuOpen) {
       setComposerHighlightedItemId(null);
       return;
     }
-    // Query/order changes reset Enter/Tab to the ranked first row; identical
-    // recomputes do not override a highlight moved by arrow keys or pointer.
-    setComposerHighlightedItemId(firstComposerMenuItemId);
-  }, [composerMenuOpen, composerMenuSelectionKey, firstComposerMenuItemId]);
+    setComposerHighlightedItemId((existing) =>
+      existing && composerMenuItems.some((item) => item.id === existing)
+        ? existing
+        : (composerMenuItems[0]?.id ?? null),
+    );
+  }, [composerMenuItems, composerMenuOpen]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);
@@ -5520,18 +5654,12 @@ export default function ChatView({
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
     });
-    // Plan-follow-up handling only applies to the live composer. An already-queued
-    // chat turn is explicitly a chat message and must always go through the normal
-    // chat path below — routing it here would drop its attachments and ignore the
-    // model/runtime/interaction mode it was queued with. (Queued plan follow-ups are
-    // a separate "plan-follow-up" kind dispatched via onSubmitPlanFollowUp directly,
-    // so they never reach onSend.)
-    if (queuedChatTurn === null && showPlanFollowUpPrompt && activeProposedPlan) {
+    if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
       });
-      if (hasLiveTurn && dispatchMode === "queue") {
+      if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
         clearComposerInput(activeThread.id);
         enqueueQueuedComposerTurn(activeThread.id, {
           id: randomUUID(),
@@ -5875,17 +6003,11 @@ export default function ChatView({
         description: toastCopy.description,
       });
     }
-    // A queued turn dispatches from its own stored snapshot, so the live composer
-    // may hold content the user is actively typing (or about to queue). Only reset
-    // the composer on a live send; clearing it during a queued auto-dispatch would
-    // delete the user's in-progress draft.
-    if (queuedChatTurn === null) {
-      promptRef.current = "";
-      clearComposerDraftContent(threadIdForSend);
-      setComposerHighlightedItemId(null);
-      setComposerCursor(0);
-      setComposerTrigger(null);
-    }
+    promptRef.current = "";
+    clearComposerDraftContent(threadIdForSend);
+    setComposerHighlightedItemId(null);
+    setComposerCursor(0);
+    setComposerTrigger(null);
 
     let createdServerThreadForLocalDraft = false;
     let turnStartSucceeded = false;
@@ -6843,11 +6965,11 @@ export default function ChatView({
       }),
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
+  const useSplitComposerPickerControls = isLocalDraftThread && !hasThreadStarted;
+  const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-32" : "w-36 sm:w-44";
+  const composerOptionsPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32";
   const composerModelEffortPickerWidthClassName = isComposerFooterCompact ? "w-40" : "w-44 sm:w-52";
   const isComposerModelEffortPickerOpen = isModelPickerOpen || isTraitsPickerOpen;
-  // Both shortcuts (Mod+Shift+M and Mod+Shift+E) now drop into the same combined
-  // surface; clear both mirrors on close so the existing keyboard handler stays
-  // in sync without needing to know about the new picker.
   const handleComposerModelEffortPickerOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -6859,12 +6981,58 @@ export default function ChatView({
     },
     [handleModelPickerOpenChange],
   );
-  const composerModelEffortPickerControl = showComposerModelBootstrapSkeleton ? (
-    selectedProviderRuntimeModelDiscoveryPending ? (
+  const composerPickerControls = showComposerModelBootstrapSkeleton ? (
+    useSplitComposerPickerControls ? (
+      <>
+        {selectedProviderRuntimeModelDiscoveryPending ? (
+          <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
+        ) : (
+          <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
+        )}
+        <ComposerControlSkeleton widthClassName={composerOptionsPickerWidthClassName} />
+      </>
+    ) : selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
     ) : (
       <ComposerControlSkeleton widthClassName={composerModelEffortPickerWidthClassName} />
     )
+  ) : useSplitComposerPickerControls ? (
+    <>
+      <ProviderModelPicker
+        compact={isComposerFooterCompact}
+        provider={selectedProvider}
+        model={selectedModelForPickerWithCustomFallback}
+        lockedProvider={lockedProvider}
+        providers={providerStatuses}
+        modelOptionsByProvider={modelOptionsByProvider}
+        loadingModelProviders={{
+          cursor: cursorModelDiscoveryPending,
+          kilo: kiloModelDiscoveryPending,
+        }}
+        hiddenProviders={settings.hiddenProviders}
+        providerOrder={settings.providerOrder}
+        onProviderModelChange={onProviderModelSelect}
+        onSelectionCommitted={scheduleComposerFocus}
+        open={isModelPickerOpen}
+        onOpenChange={handleModelPickerOpenChange}
+        shortcutLabel={modelPickerShortcutLabel}
+      />
+      <TraitsPicker
+        provider={selectedProvider}
+        threadId={threadId}
+        model={selectedModelForPickerWithCustomFallback}
+        runtimeModel={selectedRuntimeModel}
+        runtimeModels={runtimeModelsByProvider[selectedProvider]}
+        runtimeAgents={dynamicAgents}
+        modelOptions={selectedProviderModelOptions}
+        prompt={prompt}
+        onPromptChange={setPromptFromTraits}
+        open={isTraitsPickerOpen}
+        onOpenChange={handleTraitsPickerOpenChange}
+        onSelectionCommitted={scheduleComposerFocus}
+        shortcutLabel={traitsPickerShortcutLabel}
+      />
+    </>
   ) : (
     <ComposerModelEffortPicker
       compact={isComposerFooterCompact}
@@ -7678,6 +7846,7 @@ export default function ChatView({
               CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
               "drag-region px-5",
               desktopTopBarTrafficLightGutterClassName,
+              desktopTopBarWindowControlsGutterClassName,
             )}
           >
             <SidebarHeaderNavigationControls />
@@ -7815,6 +7984,7 @@ export default function ChatView({
     keybindings,
     availableEditors,
     activeThreadId: activeThread.id,
+    activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     showGitActions,
     diffOpen: resolvedDiffOpen,
     diffDisabledReason,
@@ -7822,7 +7992,9 @@ export default function ChatView({
     branchToolbar: branchToolbarProps,
     recap: threadRecap,
     pinnedMessages,
+    threadMarkers,
     pinnedMessageTextById,
+    markerMessageTextById,
     notes: threadNotes,
     onToggleDiff,
     onOpenGithubRepository: openBrowserUrl,
@@ -7830,18 +8002,18 @@ export default function ChatView({
     onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
     onUnpinMessage: handleUnpinMessage,
     onRenamePinnedMessage: handleRenamePinnedMessage,
+    onJumpToThreadMarker: handleJumpToThreadMarker,
+    onToggleThreadMarkerDone: handleToggleThreadMarkerDone,
+    onRemoveThreadMarker: handleRemoveThreadMarker,
+    onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onClose: () => setEnvironmentPanelOpen(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
-  // Empty landing and terminal surfaces always float so opening Environment never shifts layout.
+  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const environmentUsesFloatingOverlay =
-    isCenteredEmptyLanding ||
-    isTerminalEnvironmentContext ||
-    isMobileViewport ||
-    rightDockOpen ||
-    surfaceMode === "split";
+    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
@@ -8133,9 +8305,7 @@ export default function ChatView({
                             : {})}
                         />
                       ) : null}
-                      {!isVoiceRecording && !isVoiceTranscribing
-                        ? composerModelEffortPickerControl
-                        : null}
+                      {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
                       {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
                           disabled={isComposerApprovalState || isConnecting || isSendBusy}
@@ -8350,6 +8520,7 @@ export default function ChatView({
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
           desktopTopBarTrafficLightGutterClassName,
+          desktopTopBarWindowControlsGutterClassName,
         )}
       >
         <ChatHeader
@@ -8529,6 +8700,7 @@ export default function ChatView({
                     timelineControllerRef={timelineControllerRef}
                     pinnedMessageIds={pinnedMessageIds}
                     onTogglePinMessage={handleTogglePinMessage}
+                    threadMarkers={threadMarkers}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
@@ -8714,6 +8886,8 @@ export default function ChatView({
       {isInactiveSplitPane ? null : (
         <TranscriptSelectionActionLayer
           action={pendingTranscriptSelectionAction}
+          onHighlight={createHighlightFromPendingSelection}
+          onUnderline={createUnderlineFromPendingSelection}
           onAddToChat={commitTranscriptAssistantSelection}
         />
       )}

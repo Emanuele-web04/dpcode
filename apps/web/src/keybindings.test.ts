@@ -159,6 +159,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("u", { shiftKey: true }),
+    command: "settings.usage",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("o", { shiftKey: true }),
     command: "sidebar.addProject",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -211,12 +216,10 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: ctrlShortcut("tab"),
     command: "view.recent.next",
-    whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
     shortcut: ctrlShortcut("tab", { shiftKey: true }),
     command: "view.recent.previous",
-    whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
     shortcut: modShortcut("1"),
@@ -460,6 +463,24 @@ describe("split/new/close terminal shortcuts", () => {
   });
 });
 
+describe("settings shortcuts", () => {
+  it("opens usage settings with Cmd+Shift+U outside terminal focus", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "u", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "settings.usage",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "u", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+});
+
 describe("recent view shortcuts", () => {
   it("resolves Ctrl+Tab outside terminal focus", () => {
     assert.strictEqual(
@@ -482,12 +503,24 @@ describe("recent view shortcuts", () => {
     );
   });
 
-  it("does not resolve Ctrl+Tab while a terminal has focus", () => {
-    assert.isNull(
+  it("resolves Ctrl+Tab while a terminal has focus", () => {
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
+      "view.recent.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "Tab", ctrlKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: true },
+        },
+      ),
+      "view.recent.previous",
     );
   });
 });

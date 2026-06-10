@@ -42,6 +42,7 @@ import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
+import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
@@ -117,6 +118,11 @@ const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
+const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
+const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
+const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
+const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
+const WINDOW_STATE_CHANNEL = "desktop:window-state";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const ZOOM_FACTOR_CHANNEL = "desktop:zoom-factor";
 const ZOOM_FACTOR_CHANGED_CHANNEL = "desktop:zoom-factor-changed";
@@ -161,6 +167,11 @@ const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
+const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
+  "SYNARA_BACKEND_MAX_OLD_SPACE_MB",
+  "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
+  "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
+] as const;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
@@ -315,6 +326,21 @@ function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   }
 
   return null;
+}
+
+function getDesktopWindowState(window: BrowserWindow): {
+  isMaximized: boolean;
+  isFullscreen: boolean;
+} {
+  return {
+    isMaximized: window.isMaximized(),
+    isFullscreen: window.isFullScreen(),
+  };
+}
+
+function emitDesktopWindowState(window: BrowserWindow | null = mainWindow): void {
+  if (!window || window.isDestroyed()) return;
+  window.webContents.send(WINDOW_STATE_CHANNEL, getDesktopWindowState(window));
 }
 
 function isSaveFileInput(input: unknown): input is {
@@ -1804,6 +1830,19 @@ function configureAutoUpdater(): void {
 
   scheduleUpdatePoll();
 }
+// Builds process-local Node args so provider/tool children do not inherit Synara's heap guard.
+function backendNodeArgs(): string[] {
+  const configuredMaxOldSpaceMb =
+    BACKEND_MAX_OLD_SPACE_ENV_KEYS.map((key) => process.env[key]).find(
+      (value) => value !== undefined && value.trim().length > 0,
+    ) ?? null;
+  return resolveBackendNodeArgs({
+    configuredMaxOldSpaceMb,
+    existingNodeOptions: process.env.NODE_OPTIONS,
+    totalMemoryBytes: OS.totalmem(),
+  });
+}
+
 function backendEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -1866,7 +1905,7 @@ function startBackend(): void {
   }
 
   const captureBackendLogs = app.isPackaged && backendLogSink !== null;
-  const child = ChildProcess.spawn(process.execPath, [backendEntry], {
+  const child = ChildProcess.spawn(process.execPath, [...backendNodeArgs(), backendEntry], {
     cwd: resolveBackendCwd(),
     // In Electron main, process.execPath points to the Electron binary.
     // Run the child in Node mode so this backend process does not become a GUI app instance.
@@ -2240,6 +2279,40 @@ function registerIpcHandlers(): void {
     shell.showItemInFolder(resolvedPath);
   });
 
+  ipcMain.removeHandler(WINDOW_MINIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_MINIMIZE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    window?.minimize();
+  });
+
+  ipcMain.removeHandler(WINDOW_TOGGLE_MAXIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    if (!window) {
+      return { isMaximized: false, isFullscreen: false };
+    }
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+    const state = getDesktopWindowState(window);
+    window.webContents.send(WINDOW_STATE_CHANNEL, state);
+    return state;
+  });
+
+  ipcMain.removeHandler(WINDOW_CLOSE_CHANNEL);
+  ipcMain.handle(WINDOW_CLOSE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    window?.close();
+  });
+
+  ipcMain.removeHandler(WINDOW_GET_STATE_CHANNEL);
+  ipcMain.handle(WINDOW_GET_STATE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    return window ? getDesktopWindowState(window) : { isMaximized: false, isFullscreen: false };
+  });
+
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
   ipcMain.handle(UPDATE_GET_STATE_CHANNEL, async () => updateState);
 
@@ -2338,12 +2411,13 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// macOS uses a frameless shell with the traffic lights inset into the renderer's
-// top chrome (see CHAT_SURFACE_HEADER_HEIGHT_CLASS in apps/web). Windows/Linux have
-// no inset-traffic-light concept and the renderer ships no custom window-control UI,
-// so a hidden title bar there would strip the min/max/close buttons. Keep the native
-// framed title bar off macOS so window controls always work.
+// macOS keeps native traffic lights inset into the renderer's top chrome. Windows
+// uses a fully frameless shell and renderer-owned minimize/maximize/close controls,
+// so the toolbar can occupy the top edge instead of sitting below a native title bar.
 function getTitleBarOptions(): BrowserWindowConstructorOptions {
+  if (process.platform === "win32") {
+    return { frame: false };
+  }
   if (process.platform !== "darwin") {
     return {};
   }
@@ -2438,7 +2512,13 @@ function createWindow(): BrowserWindow {
     // restore bounds when the user toggles the window back out of maximized.
     window.maximize();
     window.show();
+    emitDesktopWindowState(window);
   });
+
+  window.on("maximize", () => emitDesktopWindowState(window));
+  window.on("unmaximize", () => emitDesktopWindowState(window));
+  window.on("enter-full-screen", () => emitDesktopWindowState(window));
+  window.on("leave-full-screen", () => emitDesktopWindowState(window));
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);

@@ -312,6 +312,7 @@ describe("wsNativeApi", () => {
           devin: { enabled: true, binaryPath: "devin", customModels: [] },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
+        skills: { disabled: [] },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);
@@ -473,6 +474,22 @@ describe("wsNativeApi", () => {
       cwd: "/tmp/project",
       relativePath: "plan.md",
       contents: "# Plan\n",
+    });
+  });
+
+  it("forwards project script discovery to the websocket project method", async () => {
+    requestMock.mockResolvedValue({ targets: [] });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.discoverScripts({
+      cwd: "/tmp/project",
+      depth: 2,
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsDiscoverScripts, {
+      cwd: "/tmp/project",
+      depth: 2,
     });
   });
 

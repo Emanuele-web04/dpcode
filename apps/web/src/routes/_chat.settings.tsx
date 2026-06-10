@@ -14,7 +14,15 @@ import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { pluralize } from "@t3tools/shared/text";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   closestCenter,
   DndContext,
@@ -77,6 +85,8 @@ import {
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
+import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
@@ -113,6 +123,7 @@ import {
 import {
   serverConfigQueryOptions,
   serverQueryKeys,
+  serverSettingsQueryOptions,
   serverWorktreesQueryOptions,
 } from "../lib/serverReactQuery";
 import { cn, isMacPlatform } from "../lib/utils";
@@ -123,7 +134,11 @@ import {
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
-import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
+import {
+  normalizeSettingsSection,
+  SETTINGS_NAV_ITEMS,
+  SETTINGS_TARGETS,
+} from "../settingsNavigation";
 import {
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
   SETTINGS_EMPTY_STATE_CLASS_NAME,
@@ -139,6 +154,10 @@ import { createAllThreadsSelector } from "../storeSelectors";
 import { formatRelativeTime } from "../components/Sidebar";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
+import {
+  getVisibleProviderUpdateStatuses,
+  shouldShowProviderUpdateStatus,
+} from "../providerUpdates";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -575,6 +594,24 @@ type BooleanSettingKey = {
 
 // ── Route screen ───────────────────────────────────────────────────────────
 
+// Scroll a deep-linked settings section into view when it becomes the active `?target=…`.
+// `retriggerKey` lets a panel re-attempt after late-loading data mounts the target element.
+function useSettingsTargetScroll(
+  active: boolean,
+  ref: RefObject<HTMLElement | null>,
+  retriggerKey?: unknown,
+): void {
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [active, ref, retriggerKey]);
+}
+
 function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
@@ -586,6 +623,7 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const removeDeletedThreadFromClientState = useStore(
@@ -611,6 +649,7 @@ function SettingsRouteView() {
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const providerUpdatesRef = useRef<HTMLDivElement | null>(null);
   const providerInstallsRef = useRef<HTMLDivElement | null>(null);
+  const environmentPanelRef = useRef<HTMLDivElement | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
@@ -712,33 +751,27 @@ function SettingsRouteView() {
       new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
     [serverConfigQuery.data?.providers],
   );
-  const outdatedProviderCount = useMemo(
-    () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (status) => status.versionAdvisory?.status === "behind_latest",
-      ).length,
-    [serverConfigQuery.data?.providers],
-  );
   const outdatedProviderStatuses = useMemo(
     () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (status) => status.versionAdvisory?.status === "behind_latest",
-      ),
-    [serverConfigQuery.data?.providers],
+      getVisibleProviderUpdateStatuses({
+        providers: serverConfigQuery.data?.providers ?? [],
+        hiddenProviders: settings.hiddenProviders,
+        serverSettings: serverSettingsQuery.data ?? null,
+      }),
+    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
   );
-  const shouldFocusProviderUpdates =
-    activeSection === "providers" && settingsTarget === "provider-updates";
+  const outdatedProviderCount = outdatedProviderStatuses.length;
+  useSettingsTargetScroll(
+    activeSection === "providers" && settingsTarget === SETTINGS_TARGETS.providerUpdates,
+    providerUpdatesRef,
+    serverConfigQuery.data?.providers,
+  );
 
-  useEffect(() => {
-    if (!shouldFocusProviderUpdates) {
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      providerUpdatesRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [serverConfigQuery.data?.providers, shouldFocusProviderUpdates]);
+  // Deep-link target for the chat Environment panel's gear button (see EnvironmentPanel).
+  useSettingsTargetScroll(
+    activeSection === "general" && settingsTarget === SETTINGS_TARGETS.environmentPanel,
+    environmentPanelRef,
+  );
   const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
   const worktreesByWorkspaceRoot = managedWorktrees.reduce<
     Array<{
@@ -1583,6 +1616,68 @@ function SettingsRouteView() {
           ariaLabel: "Show the Workspace section in the sidebar",
         })}
       </SettingsSection>
+
+      <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
+        <SettingsSection title="Environment panel">
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentUsage",
+            title: "Usage",
+            description: "Show the provider usage row in the chat Environment panel.",
+            resetLabel: "usage section",
+            ariaLabel: "Show the Usage section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentRepository",
+            title: "Repository",
+            description:
+              "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
+            resetLabel: "repository section",
+            ariaLabel: "Show the Repository section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentEditor",
+            title: "Editor",
+            description: "Show the Open in editor picker in the chat Environment panel.",
+            resetLabel: "editor section",
+            ariaLabel: "Show the Editor section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentRecap",
+            title: "Recap",
+            description: "Show the auto-generated chat recap in the Environment panel.",
+            resetLabel: "recap section",
+            ariaLabel: "Show the Recap section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentPinned",
+            title: "Pinned messages",
+            description: "Show the pinned-messages checklist in the Environment panel.",
+            resetLabel: "pinned messages section",
+            ariaLabel: "Show the Pinned messages section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentMarkers",
+            title: "Text markers",
+            description:
+              "Show highlighted and underlined transcript text in the Environment panel.",
+            resetLabel: "text markers section",
+            ariaLabel: "Show the Text markers section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentNotepad",
+            title: "Notepad",
+            description: "Show the per-thread notepad in the Environment panel.",
+            resetLabel: "notepad section",
+            ariaLabel: "Show the Notepad section in the Environment panel",
+          })}
+        </SettingsSection>
+      </div>
     </div>
   );
 
@@ -2406,7 +2501,7 @@ function SettingsRouteView() {
   );
 
   const renderProviderUpdatesSection = () => (
-    <div ref={providerUpdatesRef} id="provider-updates">
+    <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
       <SettingsSection title="Updates">
         <SettingsRow
           title="Provider updates"
@@ -2481,7 +2576,7 @@ function SettingsRouteView() {
   );
 
   const renderProviderInstallsSection = () => (
-    <div ref={providerInstallsRef} id="provider-installs">
+    <div ref={providerInstallsRef} id={SETTINGS_TARGETS.providerInstalls}>
       <SettingsSection title="Provider tools">
         <SettingsRow
           title="Installed CLIs"
@@ -2582,8 +2677,20 @@ function SettingsRouteView() {
                                   ? piBinaryPath
                                   : codexBinaryPath;
                 const providerStatus = providerStatusByProvider.get(providerSettings.provider);
+                const showProviderUpdateStatus = providerStatus
+                  ? shouldShowProviderUpdateStatus({
+                      provider: providerStatus,
+                      hiddenProviderSet,
+                      serverSettings: serverSettingsQuery.data ?? null,
+                    })
+                  : false;
+                const providerUpdateSuppressed =
+                  providerStatus?.versionAdvisory?.status === "behind_latest" &&
+                  !showProviderUpdateStatus;
                 const providerUpdateLabel = providerStatus
-                  ? providerUpdateStatusLabel(providerStatus)
+                  ? providerUpdateSuppressed
+                    ? null
+                    : providerUpdateStatusLabel(providerStatus)
                   : null;
                 const updateAdvisory = providerStatus?.versionAdvisory;
                 const providerUpdateState = providerStatus?.updateState?.status;
@@ -2592,9 +2699,14 @@ function SettingsRouteView() {
                   providerUpdateState === "running" ||
                   updatingProviders.has(providerSettings.provider);
                 const canUpdateProvider =
+                  showProviderUpdateStatus &&
                   updateAdvisory?.status === "behind_latest" &&
                   updateAdvisory.canUpdate &&
                   !isProviderUpdateActive;
+                const shouldShowProviderUpdateButton =
+                  showProviderUpdateStatus &&
+                  updateAdvisory?.status === "behind_latest" &&
+                  updateAdvisory.canUpdate;
 
                 return (
                   <Collapsible
@@ -2646,7 +2758,7 @@ function SettingsRouteView() {
                             )}
                           />
                         </button>
-                        {updateAdvisory?.status === "behind_latest" && updateAdvisory.canUpdate ? (
+                        {shouldShowProviderUpdateButton ? (
                           <Button
                             type="button"
                             size="xs"
@@ -2676,7 +2788,8 @@ function SettingsRouteView() {
                         <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
                           <div className="space-y-3">
                             <ProviderDocsLinks docs={providerSettings.docs} />
-                            {updateAdvisory?.status === "behind_latest" ? (
+                            {showProviderUpdateStatus &&
+                            updateAdvisory?.status === "behind_latest" ? (
                               <div className="text-xs text-muted-foreground">
                                 {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
                                   <>
@@ -3042,6 +3155,10 @@ function SettingsRouteView() {
         return renderModelsPanel();
       case "providers":
         return renderProvidersPanel();
+      case "skills":
+        return <SkillsSettingsPanel />;
+      case "usage":
+        return <ProviderUsageSettingsPanel />;
       case "advanced":
         return renderAdvancedPanel();
       default:
@@ -3067,11 +3184,13 @@ function SettingsRouteView() {
           chat/workspace headers — so the collapsed-state toggle sits by the traffic
           lights instead of floating in the centered settings body. It renders nothing
           while the sidebar is open (SidebarHeaderNavigationControls returns null), so it
-          adds no chrome in the common (open) state and never shifts the centered content
-          (hence absolute, not a layout-occupying header row). */}
+          adds no navigation chrome in the common (open) state and never shifts the centered
+          content (hence absolute, not a layout-occupying header row). The strip stays a
+          drag-region so the Windows frameless window can be moved by its top edge; the
+          caption buttons themselves are a separate fixed cluster (see root route). */}
         <div
           className={cn(
-            "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center",
+            "drag-region absolute inset-x-0 top-0 z-10 flex items-center",
             CHAT_SURFACE_HEADER_PADDING_X_CLASS,
             CHAT_SURFACE_HEADER_HEIGHT_CLASS,
             desktopTopBarTrafficLightGutterClassName,

@@ -9,7 +9,6 @@ import {
   type ServerProviderStatus,
 } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
-import { pluralize } from "@t3tools/shared/text";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -23,6 +22,8 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
@@ -58,6 +59,7 @@ import {
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
@@ -74,8 +76,18 @@ import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitRea
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
+import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import { useAppSettings } from "../appSettings";
+import {
+  getVisibleProviderUpdateStatuses,
+  isProviderUpdateActive,
+  providerUpdateNotificationKey,
+  PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+  PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+} from "../providerUpdates";
 import {
   getGitInvalidationThreadIdForEvent,
   resolveGitInvalidationCwdForThreadId,
@@ -85,28 +97,15 @@ import {
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
+const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
+const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
+const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
 const seenProviderUpdateNotificationKeys = new Set<string>();
 
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 type ActiveProviderUpdateToast =
   | { readonly kind: "prompt"; readonly key: string; readonly toastId: ProviderUpdateToastId }
   | { readonly kind: "update"; readonly key: string; readonly toastId: ProviderUpdateToastId };
-
-function isProviderUpdateActive(provider: ServerProviderStatus): boolean {
-  return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
-}
-
-function providerUpdateNotificationKey(
-  providers: ReadonlyArray<ServerProviderStatus>,
-): string | null {
-  const parts = providers
-    .map((provider) =>
-      [provider.provider, provider.versionAdvisory?.latestVersion ?? "unknown"].join(":"),
-    )
-    .toSorted();
-
-  return parts.length > 0 ? parts.join("|") : null;
-}
 
 function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
   return thread.latestTurn !== null || thread.session !== null;
@@ -148,31 +147,54 @@ function RootRouteView() {
   useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
 
+  // Single mount point for the Windows caption buttons. The cluster is pinned to the
+  // window's top-right corner (frameless Windows shell) and renders nothing on macOS,
+  // Linux, or the web build, so it is safe to mount unconditionally here — including on
+  // the pre-backend "connecting" screen, so the window stays closable before the
+  // renderer connects. Top bars reserve space for it via
+  // useDesktopTopBarWindowControlsGutterClassName().
+  //
+  // MUST render LAST: Electron builds the OS drag region by walking elements with
+  // `-webkit-app-region` in DOM order, unioning `drag` rects and subtracting `no-drag`
+  // rects in sequence. The route headers are full-width `drag-region`s that extend under
+  // this cluster, so the cluster's `no-drag` rect has to be subtracted AFTER those drag
+  // rects are added — otherwise the OS reclaims the corner as title-bar caption and
+  // swallows the click as a window drag (the buttons render but do nothing). Rendering
+  // it last in document order guarantees that subtraction wins. (z above dialogs/toasts
+  // so it also stays clickable while a modal is open.)
+  const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
+
   if (!readNativeApi()) {
     return (
-      <div className="flex h-screen flex-col bg-background text-foreground">
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">
-            Connecting to {APP_DISPLAY_NAME} server...
-          </p>
+      <>
+        <div className="flex h-screen flex-col bg-background text-foreground">
+          <div className="flex flex-1 items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              Connecting to {APP_DISPLAY_NAME} server...
+            </p>
+          </div>
         </div>
-      </div>
+        {desktopWindowControls}
+      </>
     );
   }
 
   return (
-    <ToastProvider position="top-center">
-      <AnchoredToastProvider>
-        <GitProgressToastPreviewDev />
-        <EventRouter />
-        <GlobalShortcutsDialog />
-        <GlobalWhatsNewSurface />
-        <TaskCompletionNotifications />
-        <ProviderUpdateNotifications />
-        <DesktopProjectBootstrap />
-        <Outlet />
-      </AnchoredToastProvider>
-    </ToastProvider>
+    <>
+      <ToastProvider position="top-center">
+        <AnchoredToastProvider>
+          <GitProgressToastPreviewDev />
+          <EventRouter />
+          <GlobalShortcutsDialog />
+          <GlobalWhatsNewSurface />
+          <TaskCompletionNotifications />
+          <ProviderUpdateNotifications />
+          <DesktopProjectBootstrap />
+          <Outlet />
+        </AnchoredToastProvider>
+      </ToastProvider>
+      {desktopWindowControls}
+    </>
   );
 }
 
@@ -186,21 +208,28 @@ function GitProgressToastPreviewDev() {
 function ProviderUpdateNotifications() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
   const isUpdatingAllRef = useRef(false);
   const progressToastDismissedRef = useRef(false);
+  // Provider latest-version checks are slow/network-backed, so keep this much
+  // coarser than auth focus refreshes while still avoiding manual-only refreshes.
+  useProviderStatusRefresh({
+    initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+    intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+  });
   const outdatedProviders = useMemo(
     () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (provider) =>
-          provider.versionAdvisory?.status === "behind_latest" &&
-          provider.versionAdvisory.latestVersion !== null &&
-          provider.versionAdvisory.canUpdate === true &&
-          provider.versionAdvisory.updateCommand !== null,
-      ),
-    [serverConfigQuery.data?.providers],
+      getVisibleProviderUpdateStatuses({
+        providers: serverConfigQuery.data?.providers ?? [],
+        hiddenProviders: settings.hiddenProviders,
+        serverSettings: serverSettingsQuery.data ?? null,
+        oneClickOnly: true,
+      }),
+    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
   );
   const oneClickProviders = useMemo(
     () => outdatedProviders.filter((provider) => !isProviderUpdateActive(provider)),
@@ -332,7 +361,7 @@ function ProviderUpdateNotifications() {
               : "Some provider updates failed",
           description:
             manualCommands.length > 0
-              ? `${failureLines}\n\nCopy the ${pluralize(manualCommands.length, "command")} below to update manually in a terminal.`
+              ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
               : failureLines,
           data: {
             onClose: dismissProgressToast,
@@ -390,7 +419,7 @@ function ProviderUpdateNotifications() {
     const description =
       outdatedProviders.length === 1
         ? `${providerName} has a newer version available.`
-        : `${providerName} and ${additionalCount} more ${pluralize(additionalCount, "provider")} have newer versions available.`;
+        : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
 
     let toastId!: ProviderUpdateToastId;
     const closeTrackedPrompt = () => {
@@ -413,7 +442,7 @@ function ProviderUpdateNotifications() {
           }
           void navigate({
             to: "/settings",
-            search: { section: "providers", target: "provider-updates" },
+            search: { section: "providers", target: SETTINGS_TARGETS.providerUpdates },
           });
         },
       },
@@ -635,6 +664,29 @@ function coalesceOrchestrationUiEvents(
   return coalesced;
 }
 
+function appendBounded<T>(items: T[], item: T, limit: number): void {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (items.length >= normalizedLimit) {
+    items.splice(0, items.length - normalizedLimit + 1);
+  }
+  items.push(item);
+}
+
+function addBoundedSetValue<T>(set: Set<T>, value: T, limit: number): void {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (set.has(value)) {
+    set.delete(value);
+  }
+  while (set.size >= normalizedLimit) {
+    const oldestValue = set.values().next().value as T | undefined;
+    if (oldestValue === undefined) {
+      break;
+    }
+    set.delete(oldestValue);
+  }
+  set.add(value);
+}
+
 function shouldFlushDomainEventImmediately(
   event: OrchestrationEvent,
   immediatelyFlushedAssistantMessageIds: Set<string>,
@@ -652,7 +704,11 @@ function shouldFlushDomainEventImmediately(
     return false;
   }
 
-  immediatelyFlushedAssistantMessageIds.add(event.payload.messageId);
+  addBoundedSetValue(
+    immediatelyFlushedAssistantMessageIds,
+    event.payload.messageId,
+    IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT,
+  );
   return true;
 }
 
@@ -673,6 +729,10 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
     event.type === "thread.pinned-message-removed" ||
     event.type === "thread.pinned-message-done-set" ||
     event.type === "thread.pinned-message-label-set" ||
+    event.type === "thread.marker-added" ||
+    event.type === "thread.marker-removed" ||
+    event.type === "thread.marker-done-set" ||
+    event.type === "thread.marker-label-set" ||
     event.type === "thread.archived" ||
     event.type === "thread.unarchived"
   );
@@ -757,6 +817,7 @@ function EventRouter() {
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
+    let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
@@ -1042,7 +1103,7 @@ function EventRouter() {
       }
 
       if (shellSnapshotSequence < 0) {
-        pendingShellEvents.push(item);
+        appendBounded(pendingShellEvents, item, PENDING_SHELL_EVENT_BUFFER_LIMIT);
         return;
       }
       if (item.sequence <= shellSnapshotSequence) {
@@ -1079,7 +1140,7 @@ function EventRouter() {
       const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
       if (latestThreadSequence === undefined) {
         const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
-        pendingThreadEvents.push(item.event);
+        appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
         pendingThreadEventsById.set(threadId, pendingThreadEvents);
         if (subscribedThreadIds.has(threadId)) {
           void requestThreadSnapshot(threadId);
@@ -1095,10 +1156,14 @@ function EventRouter() {
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
       if (event.type === "activity") {
-        if (event.cliKind) {
-          useTerminalStateStore.getState().setTerminalMetadata(terminalThreadId, event.terminalId, {
+        const terminalStore = useTerminalStateStore.getState();
+        const currentCliKind =
+          selectThreadTerminalState(terminalStore.terminalStateByThreadId, terminalThreadId)
+            .terminalCliKindsById[event.terminalId] ?? null;
+        if (event.cliKind || currentCliKind !== null) {
+          terminalStore.setTerminalMetadata(terminalThreadId, event.terminalId, {
             cliKind: event.cliKind,
-            label: defaultTerminalTitleForCliKind(event.cliKind),
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
           });
         }
       }
@@ -1111,6 +1176,35 @@ function EventRouter() {
         agentState: activity.agentState,
       });
     });
+    // Dev servers are first-class server processes; mirror their lifecycle into the
+    // client store so the sidebar indicator survives reconnects and stays consistent
+    // across tabs without owning any thread/terminal state.
+    const invalidateLocalServers = () => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+    };
+    const unsubDevServerEvent = api.projects.onDevServerEvent((event) => {
+      const store = useProjectRunStore.getState();
+      if (event.type === "snapshot") {
+        store.replaceAll(event.servers);
+      } else if (event.type === "upserted") {
+        store.upsertRun(event.server);
+      } else {
+        store.removeRun(event.projectId);
+      }
+      invalidateLocalServers();
+    });
+    // The channel's initial snapshot may have arrived before this listener was
+    // registered, so seed from the authoritative registry on mount.
+    void api.projects
+      .listDevServers()
+      .then(({ servers }) => {
+        if (disposed) {
+          return;
+        }
+        useProjectRunStore.getState().replaceAll(servers);
+        invalidateLocalServers();
+      })
+      .catch(() => undefined);
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
         setWorkspaceHomeDir(payload.homeDir);
@@ -1180,7 +1274,20 @@ function EventRouter() {
       });
     });
     const unsubProviderStatusesUpdated = onServerProviderStatusesUpdated((payload) => {
+      const nextProviderDiscoveryFingerprint = providerModelDiscoveryInvalidationFingerprint(
+        payload.providers,
+      );
       const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+      const previousProviderDiscoveryFingerprint =
+        providerDiscoveryInvalidationFingerprint ??
+        (currentConfig
+          ? providerModelDiscoveryInvalidationFingerprint(currentConfig.providers)
+          : null);
+      const shouldInvalidateProviderDiscovery =
+        previousProviderDiscoveryFingerprint !== null &&
+        previousProviderDiscoveryFingerprint !== nextProviderDiscoveryFingerprint;
+      providerDiscoveryInvalidationFingerprint = nextProviderDiscoveryFingerprint;
+
       if (!currentConfig) {
         void queryClient.fetchQuery(serverConfigQueryOptions()).catch(() => undefined);
         return;
@@ -1189,22 +1296,25 @@ function EventRouter() {
         ...currentConfig,
         providers: payload.providers,
       });
-      // OpenCode-compatible model availability depends on which underlying providers are connected.
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "kilo"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "opencode"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "cursor"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: providerDiscoveryQueryKeys.agents("kilo"),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: providerDiscoveryQueryKeys.agents("opencode"),
-      });
+      if (shouldInvalidateProviderDiscovery) {
+        // Model and agent discovery can depend on auth, availability, and installed versions,
+        // but not on every provider-status timestamp replay.
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "kilo"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "opencode"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "cursor"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: providerDiscoveryQueryKeys.agents("kilo"),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: providerDiscoveryQueryKeys.agents("opencode"),
+        });
+      }
     });
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
       queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
@@ -1251,6 +1361,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
+      unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
