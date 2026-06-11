@@ -74,6 +74,13 @@ import serverPackageJson from "../../../package.json" with { type: "json" };
 
 const PROVIDER = "devin" as const;
 const DEVIN_RESUME_VERSION = 1 as const;
+/**
+ * Devin's backend gate-checks `session/prompt` against `clientInfo.name`.
+ * Only `"windsurf"` passes. Non-matching names receive "Your Windsurf version
+ * is out of date" on every message. This is a known workaround.
+ * TODO: Request Devin add Synara to the allowlist or remove the gate.
+ */
+const DEVIN_CLIENT_INFO_NAME = "windsurf";
 /** Maximum turns retained in-memory per session to prevent unbounded growth. */
 const MAX_TURNS_PER_SESSION = 200;
 /** Timeout for pending approvals/elicitations before auto-cancelling (5 minutes). */
@@ -220,7 +227,7 @@ function makeDefaultRuntimeFactory(input: DevinAcpRuntimeFactoryInput) {
     childProcessSpawner: input.childProcessSpawner,
     cwd: input.cwd,
     ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : {}),
-    clientInfo: { name: "windsurf", version: serverPackageJson.version },
+    clientInfo: { name: DEVIN_CLIENT_INFO_NAME, version: serverPackageJson.version },
     ...acpNativeLoggers,
   }).pipe(
     Effect.mapError(
@@ -979,13 +986,12 @@ function makeProviderAdapter(
           const discoveryEffect = Effect.gen(function* () {
             const discoveryThreadId = ThreadId.makeUnsafe("devin-model-discovery");
             const devinSettings = { binaryPath };
-            const discoveryScope = yield* Scope.make("sequential");
             const runtime = yield* makeRuntime({
               devinSettings,
               cwd: process.cwd(),
               threadId: discoveryThreadId,
               ...(childProcessSpawner ? { childProcessSpawner } : {}),
-            }).pipe(Effect.provideService(Scope.Scope, discoveryScope));
+            });
 
             yield* runtime.start();
 

@@ -3,10 +3,7 @@ import { Cause } from "effect";
 import { describe, expect } from "vitest";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import {
-  causeIndicatesAuthRequired,
-  isAcpAuthRequiredError,
-} from "./AcpSessionRuntime.ts";
+import { causeIndicatesAuthRequired, isAcpAuthRequiredError } from "./AcpSessionRuntime.ts";
 
 describe("isAcpAuthRequiredError", () => {
   it("returns true for ACP auth-required code (-32000)", () => {
