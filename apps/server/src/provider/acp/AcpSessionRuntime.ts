@@ -33,6 +33,15 @@ import {
   type AcpToolCallState,
 } from "./AcpRuntimeModel.ts";
 
+const ACP_AUTH_REQUIRED_CODE = -32000;
+
+function isAcpAuthRequiredError(error: EffectAcpErrors.AcpError): boolean {
+  return (
+    error._tag === "AcpRequestError" &&
+    (error.code === ACP_AUTH_REQUIRED_CODE || /auth/i.test(error.errorMessage ?? ""))
+  );
+}
+
 export interface AcpSpawnInput {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -54,6 +63,17 @@ export interface AcpSessionRuntimeOptions {
     initializeResult: EffectAcpSchema.InitializeResponse,
   ) => Effect.Effect<string, EffectAcpErrors.AcpError>;
   readonly authenticateMeta?: Record<string, unknown>;
+  /**
+   * When to send the ACP `authenticate` request during start.
+   * - "always" (default): authenticate right after initialize. Required by
+   *   agents like Cursor and Grok whose session setup assumes prior auth.
+   * - "on-demand": skip authenticate; if session/new (or session/load and its
+   *   session/new fallback) fails with the ACP auth-required error (-32000),
+   *   authenticate once and retry session creation. Used by Devin so stored
+   *   `devin auth login` credentials are honored instead of forcing a fresh
+   *   browser login.
+   */
+  readonly authPolicy?: "always" | "on-demand";
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -418,43 +438,69 @@ const makeAcpSessionRuntime = (
         });
       }
 
-      const authenticatePayload = {
-        methodId: authMethodId,
-        ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
-      } satisfies EffectAcpSchema.AuthenticateRequest;
+      const runAuthenticate = Effect.gen(function* () {
+        const authenticatePayload = {
+          methodId: authMethodId,
+          ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
+        } satisfies EffectAcpSchema.AuthenticateRequest;
 
-      yield* runLoggedRequest(
-        "authenticate",
-        authenticatePayload,
-        acp.agent.authenticate(authenticatePayload),
-      );
+        yield* runLoggedRequest(
+          "authenticate",
+          authenticatePayload,
+          acp.agent.authenticate(authenticatePayload),
+        );
+      });
 
-      let sessionId: string;
-      let resumeFailed = false;
-      let sessionSetupResult:
-        | EffectAcpSchema.LoadSessionResponse
-        | EffectAcpSchema.NewSessionResponse
-        | EffectAcpSchema.ResumeSessionResponse;
-      if (options.resumeSessionId) {
-        const loadPayload = {
-          sessionId: options.resumeSessionId,
-          cwd: options.cwd,
-          mcpServers: [],
-        } satisfies EffectAcpSchema.LoadSessionRequest;
-        const resumed = yield* runLoggedRequest(
-          "session/load",
-          loadPayload,
-          acp.agent.loadSession(loadPayload),
-        ).pipe(Effect.exit);
-        if (Exit.isSuccess(resumed)) {
-          sessionId = options.resumeSessionId;
-          sessionSetupResult = resumed.value;
-          resumeFailed = false;
+      const runSessionSetup = Effect.gen(function* () {
+        let sessionId: string;
+        let resumeFailed = false;
+        let sessionSetupResult:
+          | EffectAcpSchema.LoadSessionResponse
+          | EffectAcpSchema.NewSessionResponse
+          | EffectAcpSchema.ResumeSessionResponse;
+
+        if (options.resumeSessionId) {
+          const loadPayload = {
+            sessionId: options.resumeSessionId,
+            cwd: options.cwd,
+            mcpServers: [],
+          } satisfies EffectAcpSchema.LoadSessionRequest;
+          const resumed = yield* runLoggedRequest(
+            "session/load",
+            loadPayload,
+            acp.agent.loadSession(loadPayload),
+          ).pipe(Effect.exit);
+          if (Exit.isSuccess(resumed)) {
+            sessionId = options.resumeSessionId;
+            sessionSetupResult = resumed.value;
+            resumeFailed = false;
+          } else {
+            // Under on-demand auth, re-fail all session/load errors so we can authenticate and retry.
+            // Under always-auth, fall back to session/new for all errors.
+            if (options.authPolicy === "on-demand") {
+              // Fail with a generic error - the outer on-demand logic will handle auth retry
+              return yield* new EffectAcpErrors.AcpRequestError({
+                code: -32000,
+                errorMessage: "session/load failed - authentication may be required",
+              });
+            }
+            resumeFailed = true;
+            yield* Effect.logWarning(
+              `ACP session/load failed for ${options.resumeSessionId}, falling back to session/new`,
+            );
+            const createPayload = {
+              cwd: options.cwd,
+              mcpServers: [],
+            } satisfies EffectAcpSchema.NewSessionRequest;
+            const created = yield* runLoggedRequest(
+              "session/new",
+              createPayload,
+              acp.agent.createSession(createPayload),
+            );
+            sessionId = created.sessionId;
+            sessionSetupResult = created;
+          }
         } else {
-          resumeFailed = true;
-          yield* Effect.logWarning(
-            `ACP session/load failed for ${options.resumeSessionId}, falling back to session/new`,
-          );
           const createPayload = {
             cwd: options.cwd,
             mcpServers: [],
@@ -467,18 +513,39 @@ const makeAcpSessionRuntime = (
           sessionId = created.sessionId;
           sessionSetupResult = created;
         }
+
+        return { sessionId, sessionSetupResult, resumeFailed };
+      });
+
+      let sessionId: string;
+      let sessionSetupResult:
+        | EffectAcpSchema.LoadSessionResponse
+        | EffectAcpSchema.NewSessionResponse
+        | EffectAcpSchema.ResumeSessionResponse;
+      let resumeFailed = false;
+
+      if (options.authPolicy !== "on-demand") {
+        yield* runAuthenticate;
+        const setup = yield* runSessionSetup;
+        sessionId = setup.sessionId;
+        sessionSetupResult = setup.sessionSetupResult;
+        resumeFailed = setup.resumeFailed;
       } else {
-        const createPayload = {
-          cwd: options.cwd,
-          mcpServers: [],
-        } satisfies EffectAcpSchema.NewSessionRequest;
-        const created = yield* runLoggedRequest(
-          "session/new",
-          createPayload,
-          acp.agent.createSession(createPayload),
-        );
-        sessionId = created.sessionId;
-        sessionSetupResult = created;
+        // On-demand auth: try session setup first; authenticate and retry on auth error.
+        const setupResult = yield* runSessionSetup.pipe(Effect.exit);
+        if (Exit.isFailure(setupResult)) {
+          // For on-demand auth, authenticate and retry on any error (conservative approach).
+          // If it's not an auth error, the authenticate will fail and we'll surface the real error.
+          yield* runAuthenticate;
+          const setup = yield* runSessionSetup;
+          sessionId = setup.sessionId;
+          sessionSetupResult = setup.sessionSetupResult;
+          resumeFailed = setup.resumeFailed;
+        } else {
+          sessionId = setupResult.value.sessionId;
+          sessionSetupResult = setupResult.value.sessionSetupResult;
+          resumeFailed = setupResult.value.resumeFailed;
+        }
       }
 
       yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
