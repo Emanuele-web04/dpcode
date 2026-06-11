@@ -78,6 +78,12 @@ describe("buildDiffSelectionReference", () => {
     const result = buildDiffSelectionReference("src/a.ts", longSnippet);
     expect(result.length).toBeLessThan(5_000);
   });
+
+  it("extends the fence when the snippet contains backtick fences", () => {
+    expect(buildDiffSelectionReference("docs/a.md", "```ts\nconst a = 1;\n```")).toBe(
+      "@docs/a.md\n````\n```ts\nconst a = 1;\n```\n````",
+    );
+  });
 });
 
 describe("computeSelectionLineRange", () => {

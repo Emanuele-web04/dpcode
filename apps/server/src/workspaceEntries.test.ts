@@ -284,6 +284,27 @@ describe("listWorkspaceDirectories", () => {
     });
     expect(contained.entries.map((entry) => entry.name)).toEqual(["guide.md"]);
   });
+
+  it("rejects symlinked directories that escape the workspace root", async () => {
+    const cwd = makeTempDir("t3code-workspace-list-directories-");
+    const outside = makeTempDir("t3code-workspace-list-outside-");
+    writeFile(outside, "secret.txt", "top secret");
+    fs.symlinkSync(outside, path.join(cwd, "innocent"));
+
+    await expect(
+      listWorkspaceDirectories({ cwd, includeFiles: true, relativePath: "innocent" }),
+    ).rejects.toThrow("outside the workspace root");
+
+    // A symlink that resolves inside the root is still allowed.
+    writeFile(cwd, "docs/guide.md", "# guide");
+    fs.symlinkSync(path.join(cwd, "docs"), path.join(cwd, "docs-alias"));
+    const contained = await listWorkspaceDirectories({
+      cwd,
+      includeFiles: true,
+      relativePath: "docs-alias",
+    });
+    expect(contained.entries.map((entry) => entry.name)).toEqual(["guide.md"]);
+  });
 });
 
 describe("discoverProjectScripts", () => {

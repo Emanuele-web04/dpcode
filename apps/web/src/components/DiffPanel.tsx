@@ -996,6 +996,9 @@ export default function DiffPanel({
     () =>
       hideHeader ? null : showDiffToolbar ? (
         <DiffPanelToolbar
+          // Remount per thread so per-thread view state (e.g. the expanded
+          // turn-list page size) does not leak across thread navigations.
+          key={activeThreadId ?? "no-thread"}
           activeCwd={activeCwd}
           activeThreadId={activeThreadId}
           viewSource={viewSource}

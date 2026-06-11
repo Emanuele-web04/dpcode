@@ -58,7 +58,13 @@ export function buildDiffSelectionReference(path: string, snippet: string): stri
     normalized.length > CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS
       ? normalized.slice(0, CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS)
       : normalized;
-  return `${formatComposerMentionToken(path)}\n\`\`\`\n${truncated}\n\`\`\``;
+  // Selected code can itself contain ``` fences; the wrapper fence must be
+  // longer than any backtick run in the snippet to survive Markdown parsing.
+  const longestBacktickRun = truncated
+    .match(/`+/g)
+    ?.reduce((max, run) => Math.max(max, run.length), 0);
+  const fence = "`".repeat(Math.max(3, (longestBacktickRun ?? 0) + 1));
+  return `${formatComposerMentionToken(path)}\n${fence}\n${truncated}\n${fence}`;
 }
 
 export function appendComposerPromptText(threadId: ThreadId, text: string): void {

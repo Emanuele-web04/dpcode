@@ -22,13 +22,8 @@ import {
   useState,
 } from "react";
 
-import {
-  ChangesIcon,
-  Columns2Icon,
-  DiffIcon,
-  MessageCircleIcon,
-  PanelRightCloseIcon,
-} from "~/lib/icons";
+import { ChangesIcon, DiffIcon, MessageCircleIcon, PanelRightCloseIcon } from "~/lib/icons";
+import { basenameOfPath } from "~/file-icons";
 import {
   buildFileDiffRenderKey,
   resolveDiffThemeName,
@@ -250,10 +245,6 @@ interface EditorChatPaneResizeState {
   restoreBodyUserSelect: string;
   onPointerMove: (event: PointerEvent) => void;
   onPointerEnd: (event: PointerEvent) => void;
-}
-
-function fileNameFromPath(path: string): string {
-  return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
@@ -734,14 +725,37 @@ function SyntaxHighlightedFileContents(props: {
     );
   }
 
-  const highlighter = use(getSyntaxHighlighterPromise(language));
+  // The uncached path lives in its own component: an early return above must
+  // not change this component's hook order once the cache fills.
+  return (
+    <UncachedSyntaxHighlightedFileContents
+      cacheKey={cacheKey}
+      contents={props.contents}
+      language={language}
+      themeName={props.themeName}
+    />
+  );
+}
+
+function UncachedSyntaxHighlightedFileContents(props: {
+  cacheKey: string;
+  contents: string;
+  language: string;
+  themeName: DiffThemeName;
+}) {
+  const highlighter = use(getSyntaxHighlighterPromise(props.language));
   const highlightedHtml = useMemo(() => {
-    return highlightCodeToHtmlWithFallback(highlighter, props.contents, language, props.themeName);
-  }, [highlighter, language, props.contents, props.themeName]);
+    return highlightCodeToHtmlWithFallback(
+      highlighter,
+      props.contents,
+      props.language,
+      props.themeName,
+    );
+  }, [highlighter, props.contents, props.language, props.themeName]);
 
   useEffect(() => {
-    cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, props.contents);
-  }, [cacheKey, highlightedHtml, props.contents]);
+    cacheSyntaxHighlightedHtml(props.cacheKey, highlightedHtml, props.contents);
+  }, [props.cacheKey, highlightedHtml, props.contents]);
 
   return (
     <div
@@ -759,7 +773,7 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
   }
 
   return (
-    <FilePreviewHighlightErrorBoundary fallback={plain}>
+    <FilePreviewHighlightErrorBoundary key={props.path} fallback={plain}>
       <Suspense fallback={plain}>
         <SyntaxHighlightedFileContents
           path={props.path}
@@ -903,7 +917,7 @@ function FilePreview(props: {
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12px] font-medium text-foreground">
-            {fileNameFromPath(props.selectedFilePath)}
+            {basenameOfPath(props.selectedFilePath)}
           </div>
           <div className="truncate text-[10px] text-muted-foreground/75">
             {props.selectedFilePath}

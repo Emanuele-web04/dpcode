@@ -789,6 +789,26 @@ function SuspenseShikiCodeBlock({
     );
   }
 
+  // The uncached path lives in its own component: an early return above must
+  // not change this component's hook order once the cache fills.
+  return (
+    <UncachedShikiCodeBlock
+      cacheKey={cacheKey}
+      language={language}
+      code={code}
+      themeName={themeName}
+      isStreaming={isStreaming}
+    />
+  );
+}
+
+function UncachedShikiCodeBlock({
+  cacheKey,
+  language,
+  code,
+  themeName,
+  isStreaming,
+}: SuspenseShikiCodeBlockProps & { cacheKey: string }) {
   const highlighter = use(getSyntaxHighlighterPromise(language));
   const highlightedHtml = useMemo(() => {
     return highlightCodeToHtmlWithFallback(highlighter, code, language, themeName);

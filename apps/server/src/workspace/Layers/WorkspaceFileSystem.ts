@@ -8,7 +8,9 @@ import {
   type WorkspaceFileSystemShape,
 } from "../Services/WorkspaceFileSystem";
 import { WorkspaceEntries } from "../Services/WorkspaceEntries";
+import { WorkspacePathOutsideRootError } from "../Services/WorkspacePaths";
 import { WorkspacePaths } from "../Services/WorkspacePaths";
+import { resolveRealPathWithinRoot } from "../realPathContainment";
 
 const DEFAULT_READ_FILE_MAX_BYTES = 1_000_000;
 
@@ -30,38 +32,41 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
       });
       const maxBytes = input.maxBytes ?? DEFAULT_READ_FILE_MAX_BYTES;
 
-      const fileInfo = yield* Effect.tryPromise({
-        try: () => NodeFs.stat(target.absolutePath),
+      const realPath = yield* Effect.tryPromise({
+        try: () => resolveRealPathWithinRoot(input.cwd, target.absolutePath),
         catch: (cause) =>
           new WorkspaceFileSystemError({
             cwd: input.cwd,
             relativePath: input.relativePath,
-            operation: "workspaceFileSystem.stat",
+            operation: "workspaceFileSystem.realpath",
             detail: cause instanceof Error ? cause.message : String(cause),
             cause,
           }),
       });
-
-      if (!fileInfo.isFile()) {
-        return yield* new WorkspaceFileSystemError({
-          cwd: input.cwd,
+      if (realPath === null) {
+        return yield* new WorkspacePathOutsideRootError({
+          workspaceRoot: input.cwd,
           relativePath: input.relativePath,
-          operation: "workspaceFileSystem.readFile",
-          detail: "Path is not a file.",
         });
       }
 
-      const readLength = Math.min(fileInfo.size, maxBytes);
-      const bytes = yield* Effect.tryPromise({
+      // Stat through the open handle so the size and the bytes come from the
+      // same file even if the path is swapped between the two calls.
+      const { bytes, fileSize } = yield* Effect.tryPromise({
         try: async () => {
-          if (readLength === 0) {
-            return Buffer.alloc(0);
-          }
-          const handle = await NodeFs.open(target.absolutePath, "r");
+          const handle = await NodeFs.open(realPath, "r");
           try {
+            const fileInfo = await handle.stat();
+            if (!fileInfo.isFile()) {
+              throw new Error("Path is not a file.");
+            }
+            const readLength = Math.min(fileInfo.size, maxBytes);
+            if (readLength === 0) {
+              return { bytes: Buffer.alloc(0), fileSize: fileInfo.size };
+            }
             const buffer = Buffer.alloc(readLength);
             const { bytesRead } = await handle.read(buffer, 0, readLength, 0);
-            return buffer.subarray(0, bytesRead);
+            return { bytes: buffer.subarray(0, bytesRead), fileSize: fileInfo.size };
           } finally {
             await handle.close();
           }
@@ -88,7 +93,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
       return {
         relativePath: target.relativePath,
         contents: bytes.toString("utf8"),
-        truncated: fileInfo.size > bytes.length,
+        truncated: fileSize > bytes.length,
       };
     },
   );

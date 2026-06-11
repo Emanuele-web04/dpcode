@@ -95,6 +95,7 @@ export function resolveTraitsTriggerSummary(options: {
     fastModeDescriptor,
     contextWindow,
     contextWindowOptions,
+    defaultContextWindow,
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(
     options.provider,
@@ -103,6 +104,14 @@ export function resolveTraitsTriggerSummary(options: {
     options.modelOptions,
     options.runtimeModel,
   );
+  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
+  // Providers whose only trait control is the fast toggle surface it as the
+  // primary label ("Fast"/"Default") instead of the appended badge.
+  const isFastOnlyControl =
+    supportsFastModeControl &&
+    effortLevels.length === 0 &&
+    thinkingEnabled === null &&
+    contextWindowOptions.length <= 1;
   const effortLabel = effort
     ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
     : null;
@@ -112,18 +121,23 @@ export function resolveTraitsTriggerSummary(options: {
       ? effortLabel
       : thinkingEnabled !== null
         ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
-        : null;
-  const contextWindowLabel = contextWindow
-    ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ??
-      contextWindow)
-    : null;
+        : isFastOnlyControl
+          ? fastModeEnabled
+            ? "Fast"
+            : "Default"
+          : null;
+  // Only departures from the default context window earn a label.
+  const contextWindowLabel =
+    contextWindowOptions.length > 1 && contextWindow !== defaultContextWindow
+      ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ?? null)
+      : null;
   const agentOptions = getAgentOptions(options.provider, options.runtimeAgents);
   const selectedAgent = getSelectedAgentValue(options.provider, options.modelOptions);
   const agentLabel = findAgentLabel(agentOptions, selectedAgent);
   // Agent name stands in as the primary label for agent-driven providers
   // (kilo/opencode) that expose no effort/thinking controls.
   const resolvedPrimaryLabel = primaryLabel ?? agentLabel;
-  const showsFastBadge = (fastModeDescriptor !== null || caps.supportsFastMode) && fastModeEnabled;
+  const showsFastBadge = supportsFastModeControl && fastModeEnabled && !isFastOnlyControl;
   const summaryText = [resolvedPrimaryLabel, showsFastBadge ? "Fast" : null, contextWindowLabel]
     .filter((value): value is string => Boolean(value))
     .join(" · ");
