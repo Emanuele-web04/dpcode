@@ -508,7 +508,7 @@ describe("DevinAdapterLive", () => {
     ),
   );
 
-  it.effect("falls back to the static catalog when no session is live", () =>
+  it.effect("falls back to the static catalog when no session is live and discovery fails", () =>
     Effect.gen(function* () {
       const adapter = yield* DevinAdapter;
 
@@ -520,7 +520,14 @@ describe("DevinAdapterLive", () => {
     }).pipe(
       Effect.provide(
         makeDevinAdapterLive({
-          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+          makeRuntime: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "devin",
+                method: "model/list",
+                detail: "Discovery failed",
+              }),
+            ),
         }),
       ),
     ),
@@ -547,6 +554,98 @@ describe("DevinAdapterLive", () => {
             Effect.succeed(
               makeMockRuntime({
                 configOptions: [],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("cold-start discovery returns models from mock runtime", () => {
+    let runtimeCreationCount = 0;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const result = yield* adapter.listModels!({ provider: "devin" });
+
+      assert.strictEqual(result.source, "devin.acp");
+      assert.strictEqual(result.cached, false);
+      assert.strictEqual(result.models.length, 3);
+      assert.strictEqual(runtimeCreationCount, 1);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.gen(function* () {
+              runtimeCreationCount++;
+              return yield* Effect.succeed(
+                makeMockRuntime({
+                  configOptions: [
+                    {
+                      id: "model",
+                      category: "model",
+                      type: "select",
+                      options: [
+                        { value: "model-1", name: "Model 1" },
+                        { value: "model-2", name: "Model 2" },
+                        { value: "model-3", name: "Model 3" },
+                      ],
+                    } as unknown as EffectAcpSchema.SessionConfigOption,
+                  ],
+                }),
+              );
+            }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("binaryPath is passed to mock runtime", () => {
+    let receivedBinaryPath: string | undefined;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.listModels!({ provider: "devin", binaryPath: "/custom/devin" });
+
+      assert.strictEqual(receivedBinaryPath, "/custom/devin");
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: (input) => {
+            receivedBinaryPath = input.devinSettings.binaryPath;
+            return Effect.succeed(
+              makeMockRuntime({
+                configOptions: [
+                  {
+                    id: "model",
+                    category: "model",
+                    type: "select",
+                    options: [{ value: "model-1", name: "Model 1" }],
+                  } as unknown as EffectAcpSchema.SessionConfigOption,
+                ],
+              }),
+            );
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("falls back to static catalog on mock runtime failure", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const result = yield* adapter.listModels!({ provider: "devin" });
+
+      assert.strictEqual(result.source, "devin.fallback");
+      assert.strictEqual(result.cached, true);
+      assert.deepStrictEqual(result.models, DEVIN_FALLBACK_MODELS);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "devin",
+                method: "model/list",
+                detail: "Mock runtime failure",
               }),
             ),
         }),

@@ -8,6 +8,8 @@ import {
   EventId,
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
+  type ProviderListModelsInput,
+  type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -24,6 +26,7 @@ import {
   Layer,
   Option,
   PubSub,
+  Schedule,
   Scope,
   Stream,
 } from "effect";
@@ -76,6 +79,8 @@ const DEVIN_RESUME_VERSION = 1 as const;
 const MAX_TURNS_PER_SESSION = 200;
 /** Timeout for pending approvals/elicitations before auto-cancelling (5 minutes). */
 const PENDING_DECISION_TIMEOUT_MS = 5 * 60 * 1000;
+/** Timeout for cold-start model discovery via ACP session. */
+const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 
 export interface DevinAcpRuntimeFactoryInput {
   readonly devinSettings: DevinAcpRuntimeSettings;
@@ -944,23 +949,93 @@ function makeProviderAdapter(
           supportsThreadCompaction: false,
           supportsThreadImport: false,
         } satisfies ProviderComposerCapabilities),
-      listModels: () =>
+      listModels: (input: ProviderListModelsInput) =>
         Effect.gen(function* () {
-          // Return cached model list when available to avoid re-extracting from config options.
+          // Warm path: return cached models from running sessions.
           for (const ctx of sessions.values()) {
             if (ctx.stopped) continue;
             if (ctx.cachedModels && ctx.cachedModels.length > 0) {
-              return { models: ctx.cachedModels, source: "devin.acp", cached: true };
+              return {
+                models: ctx.cachedModels,
+                source: "devin.acp",
+                cached: true,
+              } as ProviderListModelsResult;
             }
             // Fallback: read config options if cache not yet populated.
             const configOptions = yield* ctx.acp.getConfigOptions;
-            const models = extractDevinModelsFromConfigOptions(configOptions);
-            if (models.length > 0) {
-              ctx.cachedModels = models;
-              return { models, source: "devin.acp", cached: false };
+            const extractedModels = extractDevinModelsFromConfigOptions(configOptions);
+            if (extractedModels.length > 0) {
+              ctx.cachedModels = extractedModels;
+              return {
+                models: extractedModels,
+                source: "devin.acp",
+                cached: false,
+              } as ProviderListModelsResult;
             }
           }
-          return { models: DEVIN_FALLBACK_MODELS, source: "devin.fallback", cached: true };
+
+          // Cold path: no running session with models; attempt discovery.
+          const binaryPath = input?.binaryPath?.trim() || "devin";
+
+          const discoveryEffect = Effect.gen(function* () {
+            const discoveryThreadId = ThreadId.makeUnsafe("devin-model-discovery");
+            const devinSettings = { binaryPath };
+            const discoveryScope = yield* Scope.make("sequential");
+            const runtime = yield* makeRuntime({
+              devinSettings,
+              cwd: process.cwd(),
+              threadId: discoveryThreadId,
+              ...(childProcessSpawner ? { childProcessSpawner } : {}),
+            }).pipe(Effect.provideService(Scope.Scope, discoveryScope));
+
+            yield* runtime.start();
+
+            // Check config options once
+            const configOptions = yield* runtime.getConfigOptions;
+            const discoveredModels = extractDevinModelsFromConfigOptions(configOptions);
+
+            if (discoveredModels.length === 0) {
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "model/list",
+                detail: "Devin ACP model discovery found no models in config options.",
+              });
+            }
+
+            return {
+              models: discoveredModels,
+              source: "devin.acp",
+              cached: false,
+            } as ProviderListModelsResult;
+          }).pipe(
+            Effect.scoped,
+            Effect.timeoutOption(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "model/list",
+                      detail: "Timed out while discovering Devin models via ACP.",
+                    }),
+                  ),
+                onSome: (result) => Effect.succeed(result),
+              }),
+            ),
+          );
+
+          const result = yield* discoveryEffect.pipe(
+            Effect.catch(() =>
+              Effect.succeed({
+                models: DEVIN_FALLBACK_MODELS,
+                source: "devin.fallback",
+                cached: true,
+              } as ProviderListModelsResult),
+            ),
+          );
+
+          return result;
         }),
       listCommands: (input) =>
         Effect.gen(function* () {
