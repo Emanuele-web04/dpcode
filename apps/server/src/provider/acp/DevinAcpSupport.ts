@@ -1,6 +1,10 @@
 /**
  * Devin ACP support - builds the Devin stdio command and resolves auth.
  *
+ * Devin sessions use on-demand authentication: they try stored CLI credentials first,
+ * and only call authenticate (browser PKCE) when the agent explicitly rejects session
+ * creation as unauthenticated.
+ *
  * @module DevinAcpSupport
  */
 import { Effect, Layer, Scope, ServiceMap } from "effect";
@@ -29,7 +33,6 @@ export interface DevinAcpRuntimeInput extends Omit<
 }
 
 export const DEVIN_WINDSURF_API_KEY_AUTH_METHOD_ID = "windsurf-api-key";
-export const DEVIN_CACHED_TOKEN_AUTH_METHOD_IDS = ["cached_token", "devin", "devin_login"] as const;
 export const DEVIN_API_KEY_ENV_KEYS = ["WINDSURF_API_KEY"] as const;
 
 /** Env var prefixes and names to pass through to the Devin ACP child process. */
@@ -106,12 +109,6 @@ export const resolveDevinAcpAuthMethodId = (
       return DEVIN_WINDSURF_API_KEY_AUTH_METHOD_ID;
     }
 
-    for (const methodId of DEVIN_CACHED_TOKEN_AUTH_METHOD_IDS) {
-      if (authMethodIds.has(methodId)) {
-        return methodId;
-      }
-    }
-
     return yield* new EffectAcpErrorsRuntime.AcpRequestError({
       code: -32602,
       errorMessage: "Devin ACP authentication is unavailable.",
@@ -134,6 +131,7 @@ export const makeDevinAcpRuntime = (
         spawn: buildDevinAcpSpawnInput(input.devinSettings, input.cwd),
         resolveAuthMethodId: resolveDevinAcpAuthMethodId,
         authenticateMeta: { headless: true },
+        authPolicy: "on-demand",
         clientCapabilities: {
           ...input.clientCapabilities,
           elicitation: { form: {} },

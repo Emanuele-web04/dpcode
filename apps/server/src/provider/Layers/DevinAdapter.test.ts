@@ -136,7 +136,7 @@ describe("resolveDevinAcpAuthMethodId", () => {
     ),
   );
 
-  it.effect("selects Devin ACP auth when WINDSURF_API_KEY is absent", () =>
+  it.effect("returns windsurf-api-key when advertised regardless of WINDSURF_API_KEY", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => process.env.WINDSURF_API_KEY),
       () =>
