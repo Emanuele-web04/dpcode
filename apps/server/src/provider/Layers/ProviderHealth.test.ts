@@ -10,17 +10,20 @@ import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
+  checkDevinProviderStatus,
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
   hasCustomModelProvider,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
+  makeCheckDevinProviderStatus,
   makeCheckGrokProviderStatus,
   makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
+  parseDevinAuthStatusFromOutput,
   providerStatusesEqual,
   readCodexConfigModelProvider,
   stabilizeProviderStatusesAgainstTransientTimeouts,
@@ -1172,6 +1175,93 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
+  describe("checkDevinProviderStatus", () => {
+    it.effect("returns ready when Devin is installed and authenticated", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "devin");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "devin 1.2.3\n", stderr: "", code: 0 };
+            }
+            if (joined === "auth status") {
+              return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured Devin binary for version and auth probes", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckDevinProviderStatus("/custom/bin/devin");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/devin");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "devin 1.2.3\n", stderr: "", code: 0 };
+            }
+            if (joined === "auth status") {
+              return { stdout: "Authenticated\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when Devin is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.message, "Devin CLI (`devin`) is not installed or not on PATH.");
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn devin ENOENT"))),
+    );
+
+    it.effect("returns unauthenticated when auth probe reports login required", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unauthenticated");
+        assert.strictEqual(
+          status.message,
+          "Devin CLI is not authenticated. Run `devin auth login` and try again.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 1.2.3\n", stderr: "", code: 0 };
+            if (joined === "auth status") {
+              return {
+                stdout: "",
+                stderr: "Not authenticated. Run `devin auth login`.\n",
+                code: 1,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+  });
+
   // ── parseClaudeAuthStatusFromOutput pure tests ────────────────────
 
   describe("parseClaudeAuthStatusFromOutput", () => {
@@ -1209,6 +1299,89 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       });
       assert.strictEqual(parsed.status, "warning");
       assert.strictEqual(parsed.authStatus, "unknown");
+    });
+  });
+
+  describe("parseDevinAuthStatusFromOutput", () => {
+    it("exit code 0 with no auth markers is ready", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "Authenticated\n",
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+    });
+
+    it("JSON with authenticated=true is authenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: '{"authenticated":true}\n',
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+    });
+
+    it("JSON with authenticated=false is unauthenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: '{"authenticated":false}\n',
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("treats WINDSURF_API_KEY as authenticated when devin auth status reports logged out", () => {
+      const parsed = parseDevinAuthStatusFromOutput(
+        {
+          stdout: "Not logged in. Run `devin auth login`.",
+          stderr: "",
+          code: 1,
+        },
+        { hasApiKeyEnv: true },
+      );
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.match(parsed.message ?? "", /WINDSURF_API_KEY/);
+    });
+
+    it("still reports unauthenticated without the API key env", () => {
+      const parsed = parseDevinAuthStatusFromOutput(
+        {
+          stdout: "Not logged in. Run `devin auth login`.",
+          stderr: "",
+          code: 1,
+        },
+        { hasApiKeyEnv: false },
+      );
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("JSON auth=false with API key env present is still authenticated-via-key", () => {
+      const parsed = parseDevinAuthStatusFromOutput(
+        {
+          stdout: '{"auth":false}\n',
+          stderr: "",
+          code: 0,
+        },
+        { hasApiKeyEnv: true },
+      );
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.match(parsed.message ?? "", /WINDSURF_API_KEY/);
+    });
+
+    it("text login requirement is unauthenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "",
+        stderr: "Please run devin auth login\n",
+        code: 1,
+      });
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
     });
   });
 });

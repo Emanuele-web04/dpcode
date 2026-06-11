@@ -212,9 +212,8 @@ describe("derivePendingUserInputs", () => {
         tone: "info",
         payload: {
           requestId: "req-user-input-2",
-          answers: {
-            sandbox_mode: "workspace-write",
-          },
+          answeredQuestionIds: ["sandbox_mode"],
+          redacted: true,
         },
       }),
       makeActivity({
@@ -2802,11 +2801,13 @@ describe("PROVIDER_OPTIONS", () => {
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
+    const devin = PROVIDER_OPTIONS.find((option) => option.value === "devin");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "cursor", label: "Cursor", available: true },
+      { value: "devin", label: "Devin", available: true },
       { value: "gemini", label: "Gemini", available: true },
       { value: "grok", label: "Grok", available: true },
       { value: "kilo", label: "Kilo", available: true },
@@ -2841,6 +2842,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(opencode).toEqual({
       value: "opencode",
       label: "OpenCode",
+      available: true,
+    });
+    expect(devin).toEqual({
+      value: "devin",
+      label: "Devin",
       available: true,
     });
     expect(pi).toEqual({
