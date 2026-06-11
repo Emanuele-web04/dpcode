@@ -131,8 +131,17 @@ export type GrokModelOptions = typeof GrokModelOptions.Type;
  * Devin model options — intentionally empty. Devin model capabilities
  * (reasoning effort, thinking budget, etc.) are managed server-side via
  * ACP config options, not exposed as client-side toggles.
+ *
+ * Strict: rejects any object with keys (e.g. `{fastMode: true}`).
  */
-export const DevinModelOptions = Schema.Struct({});
+export const DevinModelOptions = Schema.declare(
+  (u): u is Record<string, never> =>
+    u !== null && typeof u === "object" && !Array.isArray(u) && Object.keys(u).length === 0,
+  {
+    identifier: "DevinModelOptions",
+    description: "An empty object — Devin has no client-side model options",
+  },
+);
 export type DevinModelOptions = typeof DevinModelOptions.Type;
 
 export const ProviderModelOptions = Schema.Struct({

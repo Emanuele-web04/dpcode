@@ -988,7 +988,7 @@ function makeProviderAdapter(
             const devinSettings = { binaryPath };
             const runtime = yield* makeRuntime({
               devinSettings,
-              cwd: process.cwd(),
+              cwd: input.cwd?.trim() || process.cwd(),
               threadId: discoveryThreadId,
               ...(childProcessSpawner ? { childProcessSpawner } : {}),
             });

@@ -69,6 +69,7 @@ import {
 } from "../providerStatusCache";
 import { makeProviderMaintenanceCommandCoordinator } from "../providerMaintenanceCommandCoordinator";
 import {
+  compareSemverVersions,
   enrichProviderStatusWithVersionAdvisory,
   makeProviderMaintenanceCapabilities,
   normalizeCommandPath,
@@ -1826,7 +1827,7 @@ export const makeCheckDevinProviderStatus = (
     let versionAdvisory: string | undefined;
     if (
       parsedVersion &&
-      parsedVersion.localeCompare(DEVIN_MIN_RECOMMENDED_VERSION, undefined, { numeric: true }) < 0
+      compareSemverVersions(parsedVersion, DEVIN_MIN_RECOMMENDED_VERSION) < 0
     ) {
       versionAdvisory = `Devin CLI ${parsedVersion} is below the recommended minimum (${DEVIN_MIN_RECOMMENDED_VERSION}). Update with \`devin update\` for full ACP support.`;
     }
