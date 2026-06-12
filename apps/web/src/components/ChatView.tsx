@@ -326,6 +326,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { useProjectInstructionsStore } from "~/projectInstructionsStore";
 import {
   ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
   EnvironmentPanel,
@@ -1162,6 +1163,9 @@ export default function ChatView({
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
+  );
+  const projectInstructions = useProjectInstructionsStore(
+    (s) => (activeProjectId ? (s.instructionsByProjectId[activeProjectId] ?? "") : ""),
   );
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
@@ -2272,7 +2276,10 @@ export default function ChatView({
     [threadMarkers],
   );
   // Resolve live text for the Environment panel in one transcript pass.
-  const { markerMessageTextById, pinnedMessageTextById } = useMemo(() => {
+  const {    markerMessageTextById,
+    activeProjectId,
+    projectInstructions,
+    onCopyInstructionsToNotes: handleCopyInstructionsToNotes, pinnedMessageTextById } = useMemo(() => {
     const needsPinnedText = pinnedMessageIds.size > 0;
     const needsMarkerText = markerMessageIds.size > 0;
     if (!needsPinnedText && !needsMarkerText) {
@@ -2303,6 +2310,14 @@ export default function ChatView({
     handleRenamePinnedMessage,
     handleNotesChange,
   } = usePinnedMessageActions({ activeThreadId, pinnedMessages });
+  const handleCopyInstructionsToNotes = useCallback(
+    (instructions: string) => {
+      if (activeThreadId) {
+        void handleNotesChange(activeThreadId, instructions);
+      }
+    },
+    [activeThreadId, handleNotesChange],
+  );
   const handleJumpToPinnedMessage = useCallback((messageId: MessageId) => {
     timelineControllerRef.current?.scrollToMessage(messageId);
   }, []);

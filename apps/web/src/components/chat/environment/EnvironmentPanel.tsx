@@ -12,6 +12,7 @@ import type {
   EditorId,
   MessageId,
   PinnedMessage,
+  ProjectId,
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -40,6 +41,7 @@ import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
+import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -107,6 +109,12 @@ export interface EnvironmentPanelProps {
   markerMessageTextById: ReadonlyMap<MessageId, string>;
   /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
+  /** The active project for which project instructions exist. */
+  activeProjectId: ProjectId | null;
+  /** Per-project persistent instructions for auto-inheritance into new thread notes. */
+  projectInstructions: string;
+  /** Copy project instructions into the active thread's notes. */
+  onCopyInstructionsToNotes: (instructions: string) => void;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
   /** Open the repository URL in the in-app browser panel. */
@@ -187,6 +195,9 @@ export function EnvironmentPanel({
   pinnedMessageTextById,
   markerMessageTextById,
   notes,
+  activeProjectId,
+  projectInstructions = "",
+  onCopyInstructionsToNotes,
   onToggleDiff,
   onOpenGithubRepository,
   onJumpToPinnedMessage,
@@ -325,6 +336,17 @@ export function EnvironmentPanel({
             onToggleDone={onToggleThreadMarkerDone}
             onRemove={onRemoveThreadMarker}
             onRename={onRenameThreadMarker}
+          />
+        </>
+      ) : null}
+
+      {settings.showEnvironmentInstructions && projectInstructions.trim().length > 0 ? (
+        <>
+          <EnvironmentSectionDivider />
+          <EnvironmentProjectInstructionsSection
+            projectId={activeProjectId}
+            threadNotes={notes}
+            onCopyToThreadNotes={onCopyInstructionsToNotes}
           />
         </>
       ) : null}
