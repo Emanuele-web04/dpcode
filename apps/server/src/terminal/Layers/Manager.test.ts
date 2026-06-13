@@ -17,7 +17,11 @@ import {
   type PtyProcess,
   type PtySpawnInput,
 } from "../Services/PTY";
-import { TerminalManagerRuntime, type TerminalSubprocessActivity } from "./Manager";
+import {
+  __terminalManagerShellTesting,
+  TerminalManagerRuntime,
+  type TerminalSubprocessActivity,
+} from "./Manager";
 import { Effect, Encoding } from "effect";
 
 class FakePtyProcess implements PtyProcess {
@@ -185,6 +189,36 @@ describe("TerminalManager", () => {
     for (const dir of tempDirs.splice(0, tempDirs.length)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("prefers PowerShell for new Windows terminals before cmd.exe fallbacks", () => {
+    const candidates = __terminalManagerShellTesting.resolveShellCandidates(
+      () => __terminalManagerShellTesting.windowsDefaultTerminalShell,
+      {
+        envComSpec: "C:\\Windows\\System32\\cmd.exe",
+        platform: "win32",
+      },
+    );
+
+    expect(candidates.map((candidate) => candidate.shell)).toEqual([
+      "powershell.exe",
+      "C:\\Windows\\System32\\cmd.exe",
+      "cmd.exe",
+    ]);
+  });
+
+  it("keeps explicit Windows shell requests ahead of PowerShell defaults", () => {
+    const candidates = __terminalManagerShellTesting.resolveShellCandidates(() => "pwsh.exe", {
+      envComSpec: "C:\\Windows\\System32\\cmd.exe",
+      platform: "win32",
+    });
+
+    expect(candidates.map((candidate) => candidate.shell)).toEqual([
+      "pwsh.exe",
+      "C:\\Windows\\System32\\cmd.exe",
+      "powershell.exe",
+      "cmd.exe",
+    ]);
   });
 
   function makeManager(
